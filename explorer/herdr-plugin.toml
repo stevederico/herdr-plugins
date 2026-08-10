@@ -1,0 +1,21 @@
+id = "herdr-explorer"
+name = "herdr-explorer"
+version = "0.1.0"
+description = "Thin left-dock file tree for herdr"
+min_herdr_version = "0.7.0"
+platforms = ["linux", "macos"]
+
+[[build]]
+command = ["cargo", "build", "--release"]
+
+[[panes]]
+id = "tree"
+title = "Files"
+placement = "split"
+command = ["./target/release/herdr-explorer"]
+
+[[actions]]
+id = "open"
+title = "Toggle file tree"
+description = "Open the file tree docked on the left (focus if open; close if focused)."
+command = ["bash", "scripts/open.sh"]

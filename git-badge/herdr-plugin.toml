@@ -1,0 +1,25 @@
+id = "herdr-git-badge"
+name = "herdr-git-badge"
+version = "0.1.0"
+description = "Mark spaces dirty (*) when the worktree has uncommitted changes"
+min_herdr_version = "0.7.0"
+platforms = ["linux", "macos"]
+
+# Refresh after focus changes (agents finish, you switch spaces, etc.)
+[[events]]
+on = "workspace.focused"
+command = ["bash", "scripts/refresh.sh"]
+
+[[events]]
+on = "tab.focused"
+command = ["bash", "scripts/refresh.sh"]
+
+[[events]]
+on = "pane.focused"
+command = ["bash", "scripts/refresh.sh"]
+
+[[actions]]
+id = "refresh"
+title = "Refresh git badges"
+description = "Re-scan all workspaces for dirty git state"
+command = ["bash", "scripts/refresh.sh"]
