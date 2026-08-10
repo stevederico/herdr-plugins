@@ -479,6 +479,101 @@ fn draw_doc(frame: &mut Frame, doc: &mut Doc, theme: IconTheme) -> usize {
 // Client side: how the sidebar views open things in the viewer pane.
 // ---------------------------------------------------------------------------
 
+/// True for Markdown files (editable on click instead of read-only preview).
+pub fn is_markdown(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| matches!(e.to_ascii_lowercase().as_str(), "md" | "markdown" | "mdx"))
+}
+
+/// `$VISUAL` / `$EDITOR`, then common GUI editors, then nvim.
+fn resolve_editor() -> String {
+    if let Ok(e) = std::env::var("VISUAL").or_else(|_| std::env::var("EDITOR")) {
+        if !e.trim().is_empty() {
+            return e;
+        }
+    }
+    for cand in ["zed", "code", "nvim", "vim", "nano"] {
+        if which(cand) {
+            return cand.to_string();
+        }
+    }
+    "nvim".into()
+}
+
+fn which(bin: &str) -> bool {
+    std::env::var_os("PATH")
+        .map(|p| {
+            std::env::split_paths(&p).any(|dir| {
+                let p = dir.join(bin);
+                p.is_file()
+            })
+        })
+        .unwrap_or(false)
+}
+
+fn shell_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
+/// GUI editors that open their own window and exit — spawn detached, no herdr pane.
+fn is_gui_editor(editor: &str) -> bool {
+    let base = editor
+        .split_whitespace()
+        .next()
+        .unwrap_or(editor)
+        .rsplit('/')
+        .next()
+        .unwrap_or(editor);
+    matches!(
+        base,
+        "zed" | "code" | "cursor" | "subl" | "atom" | "open" | "code-insiders"
+    )
+}
+
+/// Open a file for editing: GUI editor if configured, else a TUI editor in the
+/// preview slot (same layout as the read-only viewer).
+pub fn open_editor_in_pane(my_pane_id: &str, spawn_cwd: &Path, path: &Path) -> Result<(), String> {
+    let editor = resolve_editor();
+    let path_str = path.display().to_string();
+    if is_gui_editor(&editor) {
+        let status = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(format!("{editor} {}", shell_quote(&path_str)))
+            .current_dir(spawn_cwd)
+            .spawn()
+            .map_err(|e| format!("editor failed: {e}"))?;
+        let _ = status; // detached
+        return Ok(());
+    }
+
+    let full = crate::state::load_state().preview_full;
+    let mut pre_park_frac = owner_frac(my_pane_id);
+
+    // Close existing preview/editor viewer in this tab so we don't stack panes.
+    if let Ok(json) = ipc::call_text("pane.list", serde_json::json!({})) {
+        if let Some((id, _)) = viewer_pane_in_tab(&json, my_pane_id) {
+            let _ = ipc::call_text("pane.close", serde_json::json!({ "pane_id": id }));
+            restore_parked(my_pane_id);
+            pre_park_frac = owner_frac(my_pane_id).or(pre_park_frac);
+        }
+    }
+    if full {
+        park_others(my_pane_id);
+    }
+    let label = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("edit")
+        .to_string();
+    let cmd = format!("exec {editor} {}", shell_quote(&path_str));
+    spawn_command_pane(my_pane_id, spawn_cwd, &cmd, &label, pre_park_frac)?;
+    if full {
+        enforce_owner_width(my_pane_id, pre_park_frac.unwrap_or(0.3));
+    }
+    Ok(())
+}
+
 /// Write `payload` to the caller's control file and make sure a live viewer
 /// pane exists beside it (spawning one to our right when needed). Errors are
 /// human-readable notices.
@@ -616,13 +711,13 @@ fn viewer_pane_in_tab(pane_list_json: &str, my_pane_id: &str) -> Option<(String,
     Some((id, stale))
 }
 
-/// Split a viewer pane directly to the caller's right: split the right
-/// NEIGHBOR and swap the fresh pane into its left slot (split only goes
-/// right/down), so the layout reads sidebar | preview | rest.
-fn spawn_viewer_pane(
+/// Split a pane to the caller's right and run `command` in it.
+/// `focus_editor`: true focuses the new pane (for editing); false keeps the sidebar.
+fn spawn_command_pane(
     my_pane_id: &str,
     spawn_cwd: &Path,
-    control: &Path,
+    command: &str,
+    label: &str,
     pre_park_frac: Option<f64>,
 ) -> Result<(), String> {
     let layout = ipc::call_text("pane.layout", serde_json::json!({ "pane_id": my_pane_id })).ok();
@@ -656,6 +751,42 @@ fn spawn_viewer_pane(
             serde_json::json!({ "source_pane_id": new_pane, "target_pane_id": target }),
         );
     }
+    let _ = ipc::call_text(
+        "pane.send_input",
+        serde_json::json!({ "pane_id": new_pane, "text": command, "keys": ["Enter"] }),
+    );
+    let _ = ipc::call_text(
+        "pane.rename",
+        serde_json::json!({ "pane_id": new_pane, "label": label }),
+    );
+    // Stamp as preview-slot so Esc/close and reuse logic still find this pane.
+    let _ = ipc::call_text(
+        "pane.report_metadata",
+        serde_json::json!({
+            "pane_id": new_pane,
+            "source": METADATA_SOURCE,
+            "tokens": { METADATA_SOURCE: crate::state::unix_now().to_string() },
+        }),
+    );
+    // Editor panes take focus so typing works; read-only preview keeps the tree focused.
+    let focus_id = if label == "Preview" {
+        my_pane_id
+    } else {
+        new_pane.as_str()
+    };
+    let _ = ipc::call_text("pane.focus", serde_json::json!({ "pane_id": focus_id }));
+    Ok(())
+}
+
+/// Split a viewer pane directly to the caller's right: split the right
+/// NEIGHBOR and swap the fresh pane into its left slot (split only goes
+/// right/down), so the layout reads sidebar | preview | rest.
+fn spawn_viewer_pane(
+    my_pane_id: &str,
+    spawn_cwd: &Path,
+    control: &Path,
+    pre_park_frac: Option<f64>,
+) -> Result<(), String> {
     let exe = std::env::current_exe()
         .map(|p| p.display().to_string())
         .unwrap_or_else(|_| "herdr-sidebar".to_string());
@@ -663,18 +794,7 @@ fn spawn_viewer_pane(
     let command = format!("& \"{exe}\" --preview \"{}\"", control.display());
     #[cfg(not(windows))]
     let command = format!("exec \"{exe}\" --preview \"{}\"", control.display());
-    let _ = ipc::call_text(
-        "pane.send_input",
-        serde_json::json!({ "pane_id": new_pane, "text": command, "keys": ["Enter"] }),
-    );
-    let _ = ipc::call_text(
-        "pane.rename",
-        serde_json::json!({ "pane_id": new_pane, "label": "Preview" }),
-    );
-    // The split/swap can move focus with the slot; stay in the sidebar so
-    // the user keeps clicking.
-    let _ = ipc::call_text("pane.focus", serde_json::json!({ "pane_id": my_pane_id }));
-    Ok(())
+    spawn_command_pane(my_pane_id, spawn_cwd, &command, "Preview", pre_park_frac)
 }
 
 
