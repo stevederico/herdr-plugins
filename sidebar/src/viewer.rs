@@ -237,6 +237,68 @@ impl Doc {
         self.notice.clear();
     }
 
+    /// Option/Alt+Delete (macOS word-delete): remove the word left of the cursor.
+    fn backspace_word(&mut self) {
+        let Some(buf) = &mut self.buffer else { return };
+        if buf.is_empty() {
+            return;
+        }
+        self.cursor_row = self.cursor_row.min(buf.len() - 1);
+        if self.cursor_col == 0 {
+            // Same as plain backspace at column 0: join with previous line.
+            self.backspace();
+            return;
+        }
+        let line = &buf[self.cursor_row];
+        let before = &line[..self.cursor_col];
+        // Skip trailing whitespace, then skip the preceding word (non-whitespace).
+        let trimmed = before.trim_end();
+        let word_start = trimmed
+            .rfind(|c: char| c.is_whitespace())
+            .map(|i| {
+                // i is the last whitespace char; word starts after it.
+                let mut j = i + 1;
+                while j < trimmed.len() && !trimmed.is_char_boundary(j) {
+                    j += 1;
+                }
+                j
+            })
+            .unwrap_or(0);
+        let line = &mut buf[self.cursor_row];
+        line.replace_range(word_start..self.cursor_col, "");
+        self.cursor_col = word_start;
+        self.dirty = true;
+        self.notice.clear();
+    }
+
+    /// Fn+Delete / Forward delete: remove the char under the cursor.
+    fn delete_forward(&mut self) {
+        let Some(buf) = &mut self.buffer else { return };
+        if buf.is_empty() {
+            return;
+        }
+        self.cursor_row = self.cursor_row.min(buf.len() - 1);
+        let line_len = buf[self.cursor_row].len();
+        if self.cursor_col < line_len {
+            let line = &mut buf[self.cursor_row];
+            let mut end = self.cursor_col + 1;
+            while end < line.len() && !line.is_char_boundary(end) {
+                end += 1;
+            }
+            line.replace_range(self.cursor_col..end, "");
+            self.dirty = true;
+            self.notice.clear();
+            return;
+        }
+        // At end of line: join with next line.
+        if self.cursor_row + 1 < buf.len() {
+            let next = buf.remove(self.cursor_row + 1);
+            buf[self.cursor_row].push_str(&next);
+            self.dirty = true;
+            self.notice.clear();
+        }
+    }
+
     fn move_left(&mut self) {
         self.clamp_cursor();
         if self.cursor_col > 0 {
@@ -580,6 +642,11 @@ pub fn run(control: &Path) -> std::io::Result<()> {
                         }
                         // Ctrl+S save (editable files).
                         KeyCode::Char('s') if ctrl && doc.editable() => doc.save(),
+                        // Ctrl+W = word delete (when Option isn't passed through by the terminal).
+                        KeyCode::Char('w') if ctrl && doc.editable() => {
+                            doc.backspace_word();
+                            doc.ensure_visible(page);
+                        }
                         // q closes read-only previews; in edit mode type q as text (Esc closes).
                         KeyCode::Char('q') if !doc.editable() => {
                             close_own_pane(control);
@@ -632,7 +699,25 @@ pub fn run(control: &Path) -> std::io::Result<()> {
                             doc.ensure_visible(page);
                         }
                         KeyCode::Backspace if doc.editable() => {
-                            doc.backspace();
+                            // Option+Delete on macOS arrives as Alt+Backspace (word delete).
+                            if key.modifiers.contains(KeyModifiers::ALT)
+                                || key.modifiers.contains(KeyModifiers::META)
+                            {
+                                doc.backspace_word();
+                            } else {
+                                doc.backspace();
+                            }
+                            doc.ensure_visible(page);
+                        }
+                        KeyCode::Delete if doc.editable() => {
+                            if key.modifiers.contains(KeyModifiers::ALT)
+                                || key.modifiers.contains(KeyModifiers::META)
+                            {
+                                // Option+Fn+Delete: delete word forward (simple: word left if at boundary).
+                                doc.backspace_word();
+                            } else {
+                                doc.delete_forward();
+                            }
                             doc.ensure_visible(page);
                         }
                         KeyCode::Char(c) if doc.editable() && !ctrl => {
