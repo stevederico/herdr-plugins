@@ -292,21 +292,19 @@ impl App {
         ctl.report_tokens(MY_VIEW, self.merged());
     }
 
-    /// Open a file beside the sidebar: Markdown opens in `$EDITOR` (editable);
-    /// everything else uses the read-only preview pane.
+    /// Open a file in the preview pane beside the sidebar (editable text;
+    /// same layout/reuse as before — type to edit, Ctrl+S to save).
     fn open_preview(&mut self, path: &Path) {
         let Some(pane_id) = self.pane_ctl.as_ref().map(|c| c.pane_id.clone()) else {
             self.notice = Some("preview needs a herdr pane".into());
             return;
         };
-        let root = self.tree.root_path();
-        let result = if herdr_sidebar::viewer::is_markdown(path) {
-            herdr_sidebar::viewer::open_editor_in_pane(&pane_id, &root, path)
-        } else {
-            let payload = herdr_sidebar::viewer::file_request(path);
-            herdr_sidebar::viewer::open_in_pane(&pane_id, &root, &payload)
-        };
-        if let Err(e) = result {
+        let payload = herdr_sidebar::viewer::file_request(path);
+        if let Err(e) = herdr_sidebar::viewer::open_in_pane(
+            &pane_id,
+            &self.tree.root_path(),
+            &payload,
+        ) {
             self.notice = Some(e);
         }
     }

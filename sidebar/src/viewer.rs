@@ -14,8 +14,8 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crossterm::event::{
-    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, MouseButton,
-    MouseEventKind,
+    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, KeyModifiers,
+    MouseButton, MouseEventKind,
 };
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout};
@@ -110,10 +110,201 @@ fn parse_request(raw: &str) -> Option<Request> {
 struct Doc {
     name: String,
     context: String,
+    /// Display lines for read-only content (diffs / errors / binary).
     lines: Vec<Line<'static>>,
+    /// Editable raw lines for file previews (None = read-only).
+    buffer: Option<Vec<String>>,
+    path: Option<PathBuf>,
+    cursor_row: usize,
+    /// Byte index into the current line (clamped on draw).
+    cursor_col: usize,
+    dirty: bool,
+    notice: String,
     /// File previews get a line-number gutter; diffs carry their own +/-.
     numbered: bool,
     scroll: usize,
+}
+
+impl Doc {
+    fn empty_wait() -> Self {
+        Self {
+            name: "(nothing to show)".into(),
+            context: String::new(),
+            lines: vec![Line::raw("(waiting for a click in the sidebar)")],
+            buffer: None,
+            path: None,
+            cursor_row: 0,
+            cursor_col: 0,
+            dirty: false,
+            notice: String::new(),
+            numbered: false,
+            scroll: 0,
+        }
+    }
+
+    fn line_count(&self) -> usize {
+        if let Some(buf) = &self.buffer {
+            buf.len().max(1)
+        } else {
+            self.lines.len().max(1)
+        }
+    }
+
+    fn editable(&self) -> bool {
+        self.buffer.is_some() && self.path.is_some()
+    }
+
+    fn clamp_cursor(&mut self) {
+        let Some(buf) = &self.buffer else { return };
+        if buf.is_empty() {
+            self.cursor_row = 0;
+            self.cursor_col = 0;
+            return;
+        }
+        self.cursor_row = self.cursor_row.min(buf.len() - 1);
+        let len = buf[self.cursor_row].len();
+        self.cursor_col = self.cursor_col.min(len);
+    }
+
+    fn ensure_visible(&mut self, page: usize) {
+        let page = page.max(1);
+        if self.cursor_row < self.scroll {
+            self.scroll = self.cursor_row;
+        } else if self.cursor_row >= self.scroll + page {
+            self.scroll = self.cursor_row + 1 - page;
+        }
+    }
+
+    fn insert_char(&mut self, c: char) {
+        let Some(buf) = &mut self.buffer else { return };
+        self.cursor_row = self.cursor_row.min(buf.len().saturating_sub(1));
+        if buf.is_empty() {
+            buf.push(String::new());
+        }
+        let line = &mut buf[self.cursor_row];
+        self.cursor_col = self.cursor_col.min(line.len());
+        line.insert(self.cursor_col, c);
+        self.cursor_col += c.len_utf8();
+        self.dirty = true;
+        self.notice.clear();
+    }
+
+    fn insert_newline(&mut self) {
+        let Some(buf) = &mut self.buffer else { return };
+        if buf.is_empty() {
+            buf.push(String::new());
+        }
+        self.cursor_row = self.cursor_row.min(buf.len() - 1);
+        let line = &mut buf[self.cursor_row];
+        self.cursor_col = self.cursor_col.min(line.len());
+        let rest = line[self.cursor_col..].to_string();
+        line.truncate(self.cursor_col);
+        buf.insert(self.cursor_row + 1, rest);
+        self.cursor_row += 1;
+        self.cursor_col = 0;
+        self.dirty = true;
+        self.notice.clear();
+    }
+
+    fn backspace(&mut self) {
+        let Some(buf) = &mut self.buffer else { return };
+        if buf.is_empty() {
+            return;
+        }
+        self.cursor_row = self.cursor_row.min(buf.len() - 1);
+        if self.cursor_col > 0 {
+            let line = &mut buf[self.cursor_row];
+            // delete previous UTF-8 char
+            let mut i = self.cursor_col;
+            while i > 0 && !line.is_char_boundary(i - 1) {
+                i -= 1;
+            }
+            i -= 1;
+            line.remove(i);
+            self.cursor_col = i;
+            self.dirty = true;
+            self.notice.clear();
+            return;
+        }
+        if self.cursor_row == 0 {
+            return;
+        }
+        let cur = buf.remove(self.cursor_row);
+        self.cursor_row -= 1;
+        self.cursor_col = buf[self.cursor_row].len();
+        buf[self.cursor_row].push_str(&cur);
+        self.dirty = true;
+        self.notice.clear();
+    }
+
+    fn move_left(&mut self) {
+        self.clamp_cursor();
+        if self.cursor_col > 0 {
+            let Some(buf) = &self.buffer else { return };
+            let line = &buf[self.cursor_row];
+            let mut i = self.cursor_col;
+            while i > 0 && !line.is_char_boundary(i - 1) {
+                i -= 1;
+            }
+            self.cursor_col = i - 1;
+        } else if self.cursor_row > 0 {
+            self.cursor_row -= 1;
+            if let Some(buf) = &self.buffer {
+                self.cursor_col = buf[self.cursor_row].len();
+            }
+        }
+    }
+
+    fn move_right(&mut self) {
+        self.clamp_cursor();
+        let Some(buf) = &self.buffer else { return };
+        let line_len = buf[self.cursor_row].len();
+        if self.cursor_col < line_len {
+            let line = &buf[self.cursor_row];
+            let mut i = self.cursor_col + 1;
+            while i < line.len() && !line.is_char_boundary(i) {
+                i += 1;
+            }
+            self.cursor_col = i;
+        } else if self.cursor_row + 1 < buf.len() {
+            self.cursor_row += 1;
+            self.cursor_col = 0;
+        }
+    }
+
+    fn move_up(&mut self) {
+        if self.cursor_row > 0 {
+            self.cursor_row -= 1;
+            self.clamp_cursor();
+        }
+    }
+
+    fn move_down(&mut self) {
+        let Some(buf) = &self.buffer else { return };
+        if self.cursor_row + 1 < buf.len() {
+            self.cursor_row += 1;
+            self.clamp_cursor();
+        }
+    }
+
+    fn save(&mut self) {
+        let (Some(path), Some(buf)) = (&self.path, &self.buffer) else {
+            self.notice = "not editable".into();
+            return;
+        };
+        let mut body = buf.join("\n");
+        // Preserve trailing newline if the original had content.
+        if !body.is_empty() && !body.ends_with('\n') {
+            body.push('\n');
+        }
+        match std::fs::write(path, body) {
+            Ok(()) => {
+                self.dirty = false;
+                self.notice = "saved".into();
+            }
+            Err(e) => self.notice = format!("save failed: {e}"),
+        }
+    }
 }
 
 fn load(request: &Request) -> Doc {
@@ -162,6 +353,12 @@ fn load_show(root: &Path, spec: &str, path: Option<&str>) -> Doc {
         name: spec.to_string(),
         context: format!("git show {spec} — {}", root.display()),
         lines,
+        buffer: None,
+        path: None,
+        cursor_row: 0,
+        cursor_col: 0,
+        dirty: false,
+        notice: String::new(),
         numbered: false,
         scroll: 0,
     }
@@ -172,36 +369,62 @@ fn load_file(target: &Path) -> Doc {
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| target.display().to_string());
-    let lines: Vec<Line<'static>> = match std::fs::read(target) {
-        Err(e) => vec![Line::raw(format!("(unreadable: {e})"))],
+    match std::fs::read(target) {
+        Err(e) => Doc {
+            name,
+            context: target.display().to_string(),
+            lines: vec![Line::raw(format!("(unreadable: {e})"))],
+            buffer: None,
+            path: None,
+            cursor_row: 0,
+            cursor_col: 0,
+            dirty: false,
+            notice: String::new(),
+            numbered: true,
+            scroll: 0,
+        },
         Ok(bytes) => {
             let head = &bytes[..bytes.len().min(8192)];
             if head.contains(&0) {
-                vec![Line::raw(format!("(binary file — {} bytes)", bytes.len()))]
-            } else {
-                let truncated = bytes.len() > MAX_BYTES;
-                let text = String::from_utf8_lossy(&bytes[..bytes.len().min(MAX_BYTES)]);
-                // Syntax highlighting when a grammar matches; plain otherwise.
-                let mut lines: Vec<Line<'static>> =
-                    crate::syntax::highlight(&name, &text, MAX_LINES).unwrap_or_else(|| {
-                        text.lines().take(MAX_LINES).map(|l| Line::raw(l.to_string())).collect()
-                    });
-                if truncated || text.lines().count() > MAX_LINES {
-                    lines.push(Line::raw("… (truncated)"));
-                }
-                if lines.is_empty() {
-                    lines.push(Line::raw("(empty file)"));
-                }
-                lines
+                return Doc {
+                    name,
+                    context: target.display().to_string(),
+                    lines: vec![Line::raw(format!("(binary file — {} bytes)", bytes.len()))],
+                    buffer: None,
+                    path: None,
+                    cursor_row: 0,
+                    cursor_col: 0,
+                    dirty: false,
+                    notice: String::new(),
+                    numbered: true,
+                    scroll: 0,
+                };
+            }
+            let truncated = bytes.len() > MAX_BYTES;
+            let text = String::from_utf8_lossy(&bytes[..bytes.len().min(MAX_BYTES)]);
+            // Cap edit buffer size so the pane stays responsive.
+            let mut buffer: Vec<String> = text.lines().take(MAX_LINES).map(str::to_string).collect();
+            if buffer.is_empty() {
+                buffer.push(String::new());
+            }
+            let mut notice = String::new();
+            if truncated || text.lines().count() > MAX_LINES {
+                notice = "truncated — edit head only".into();
+            }
+            Doc {
+                name,
+                context: target.display().to_string(),
+                lines: Vec::new(),
+                buffer: Some(buffer),
+                path: Some(target.to_path_buf()),
+                cursor_row: 0,
+                cursor_col: 0,
+                dirty: false,
+                notice,
+                numbered: true,
+                scroll: 0,
             }
         }
-    };
-    Doc {
-        name,
-        context: target.display().to_string(),
-        lines,
-        numbered: true,
-        scroll: 0,
     }
 }
 
@@ -253,6 +476,12 @@ fn load_diff(root: &Path, rel: &str, kind: &str) -> Doc {
         name: name.clone(),
         context: format!("{} — {what} diff", root.join(rel).display()),
         lines,
+        buffer: None,
+        path: None,
+        cursor_row: 0,
+        cursor_col: 0,
+        dirty: false,
+        notice: String::new(),
         numbered: false,
         scroll: 0,
     }
@@ -319,13 +548,7 @@ pub fn run(control: &Path) -> std::io::Result<()> {
         crate::state::load_state().icons,
     );
     let mut current = read_control(control);
-    let mut doc = current.as_ref().map(load).unwrap_or_else(|| Doc {
-        name: "(nothing to show)".into(),
-        context: String::new(),
-        lines: vec![Line::raw("(waiting for a click in the sidebar)")],
-        numbered: false,
-        scroll: 0,
-    });
+    let mut doc = current.as_ref().map(load).unwrap_or_else(Doc::empty_wait);
     report_identity(&doc.name);
 
     // Blank the primary screen so pane handoffs never flash the shell.
@@ -345,28 +568,108 @@ pub fn run(control: &Path) -> std::io::Result<()> {
         if let Err(e) = draw {
             break Err(e);
         }
-        let max = doc.lines.len().saturating_sub(1);
+        let max = doc.line_count().saturating_sub(1);
         if event::poll(POLL)? {
             match event::read()? {
-                Event::Key(key) if key.kind == KeyEventKind::Press => match key.code {
-                    KeyCode::Esc | KeyCode::Char('q') => {
-                        close_own_pane(control);
-                        break Ok(());
+                Event::Key(key) if key.kind == KeyEventKind::Press => {
+                    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+                    match key.code {
+                        KeyCode::Esc => {
+                            close_own_pane(control);
+                            break Ok(());
+                        }
+                        // Ctrl+S save (editable files).
+                        KeyCode::Char('s') if ctrl && doc.editable() => doc.save(),
+                        // q closes read-only previews; in edit mode type q as text (Esc closes).
+                        KeyCode::Char('q') if !doc.editable() => {
+                            close_own_pane(control);
+                            break Ok(());
+                        }
+                        KeyCode::Up => {
+                            if doc.editable() {
+                                doc.move_up();
+                                doc.ensure_visible(page);
+                            } else {
+                                doc.scroll = doc.scroll.saturating_sub(1);
+                            }
+                        }
+                        KeyCode::Down => {
+                            if doc.editable() {
+                                doc.move_down();
+                                doc.ensure_visible(page);
+                            } else {
+                                doc.scroll = (doc.scroll + 1).min(max);
+                            }
+                        }
+                        KeyCode::Left if doc.editable() => doc.move_left(),
+                        KeyCode::Right if doc.editable() => doc.move_right(),
+                        KeyCode::PageUp => {
+                            doc.scroll = doc.scroll.saturating_sub(page);
+                            if doc.editable() {
+                                doc.cursor_row = doc.cursor_row.saturating_sub(page);
+                                doc.clamp_cursor();
+                            }
+                        }
+                        KeyCode::PageDown => {
+                            doc.scroll = (doc.scroll + page).min(max);
+                            if doc.editable() {
+                                doc.cursor_row = (doc.cursor_row + page).min(max);
+                                doc.clamp_cursor();
+                            }
+                        }
+                        KeyCode::Home if doc.editable() => {
+                            doc.cursor_col = 0;
+                        }
+                        KeyCode::End if doc.editable() => {
+                            if let Some(buf) = &doc.buffer {
+                                doc.cursor_col = buf.get(doc.cursor_row).map(|l| l.len()).unwrap_or(0);
+                            }
+                        }
+                        KeyCode::Home => doc.scroll = 0,
+                        KeyCode::End => doc.scroll = max,
+                        KeyCode::Enter if doc.editable() => {
+                            doc.insert_newline();
+                            doc.ensure_visible(page);
+                        }
+                        KeyCode::Backspace if doc.editable() => {
+                            doc.backspace();
+                            doc.ensure_visible(page);
+                        }
+                        KeyCode::Char(c) if doc.editable() && !ctrl => {
+                            // j/k scroll only in read-only mode; in edit mode they type.
+                            doc.insert_char(c);
+                            doc.ensure_visible(page);
+                        }
+                        KeyCode::Char('k') if !doc.editable() => {
+                            doc.scroll = doc.scroll.saturating_sub(1);
+                        }
+                        KeyCode::Char('j') if !doc.editable() => {
+                            doc.scroll = (doc.scroll + 1).min(max);
+                        }
+                        KeyCode::Char('g') if !doc.editable() => doc.scroll = 0,
+                        KeyCode::Char('G') if !doc.editable() => doc.scroll = max,
+                        _ => {}
                     }
-                    KeyCode::Up | KeyCode::Char('k') => doc.scroll = doc.scroll.saturating_sub(1),
-                    KeyCode::Down | KeyCode::Char('j') => doc.scroll = (doc.scroll + 1).min(max),
-                    KeyCode::PageUp => doc.scroll = doc.scroll.saturating_sub(page),
-                    KeyCode::PageDown => doc.scroll = (doc.scroll + page).min(max),
-                    KeyCode::Home | KeyCode::Char('g') => doc.scroll = 0,
-                    KeyCode::End | KeyCode::Char('G') => doc.scroll = max,
-                    _ => {}
-                },
+                }
                 Event::Mouse(mouse) => match mouse.kind {
                     MouseEventKind::ScrollUp => doc.scroll = doc.scroll.saturating_sub(3),
-                    MouseEventKind::ScrollDown => doc.scroll = (doc.scroll + 3).min(max),
+                    MouseEventKind::ScrollDown => {
+                        doc.scroll = (doc.scroll + 3).min(max);
+                    }
                     MouseEventKind::Down(MouseButton::Left) if mouse.row == 0 => {
                         close_own_pane(control);
                         break Ok(());
+                    }
+                    MouseEventKind::Down(MouseButton::Left) if doc.editable() && mouse.row >= 1 => {
+                        // Click to place cursor (row under header).
+                        let row = usize::from(mouse.row.saturating_sub(1)) + doc.scroll;
+                        if let Some(buf) = &doc.buffer {
+                            doc.cursor_row = row.min(buf.len().saturating_sub(1));
+                            let number_width = buf.len().to_string().len() + 1;
+                            let col = usize::from(mouse.column).saturating_sub(number_width);
+                            doc.cursor_col = col;
+                            doc.clamp_cursor();
+                        }
                     }
                     _ => {}
                 },
@@ -380,17 +683,27 @@ pub fn run(control: &Path) -> std::io::Result<()> {
             }
             let target = read_control(control);
             if target != current {
-                current = target;
-                if let Some(request) = &current {
-                    doc = load(request);
-                    report_identity(&doc.name);
+                // Don't clobber unsaved edits when the sidebar re-sends the same file.
+                let same_file = matches!(
+                    (&current, &target),
+                    (Some(Request::File(a)), Some(Request::File(b))) if a == b
+                );
+                if same_file && doc.dirty {
+                    // keep buffer
+                } else {
+                    current = target;
+                    if let Some(request) = &current {
+                        doc = load(request);
+                        report_identity(&doc.name);
+                    }
                 }
             } else if beat.is_multiple_of(8)
+                && !doc.dirty
                 && let Some(request @ Request::Diff { .. }) = &current
             {
                 let keep = doc.scroll;
                 doc = load(request);
-                doc.scroll = keep.min(doc.lines.len().saturating_sub(1));
+                doc.scroll = keep.min(doc.line_count().saturating_sub(1));
             }
         }
     };
@@ -410,19 +723,21 @@ fn draw_doc(frame: &mut Frame, doc: &mut Doc, theme: IconTheme) -> usize {
     ])
     .areas(area);
 
+    let total = doc.line_count();
     doc.scroll = doc
         .scroll
-        .min(doc.lines.len().saturating_sub(usize::from(body.height).max(1)));
+        .min(total.saturating_sub(usize::from(body.height).max(1)));
 
     let file_icon = icon(theme, &doc.name, false, false);
     let icon_style = match file_icon.rgb {
         Some((r, g, b)) => Style::default().fg(Color::Rgb(r, g, b)),
         None => Style::default(),
     };
+    let dirty_mark = if doc.dirty { " ●" } else { "" };
     let left = vec![
         Span::styled(" ✕ ", Style::default().bold().fg(Color::LightBlue)),
         Span::styled(format!("{} ", file_icon.glyph), icon_style),
-        Span::styled(doc.name.clone(), Style::default().bold()),
+        Span::styled(format!("{}{dirty_mark}", doc.name), Style::default().bold()),
     ];
     let used: usize = left.iter().map(Span::width).sum();
     let avail = usize::from(area.width).saturating_sub(used + 2);
@@ -440,140 +755,93 @@ fn draw_doc(frame: &mut Frame, doc: &mut Doc, theme: IconTheme) -> usize {
     spans.push(Span::styled(format!("  {shown}"), Style::default().dim()));
     frame.render_widget(Paragraph::new(Line::from(spans)), header);
 
-    let number_width = doc.lines.len().to_string().len();
-    let text: Vec<Line> = doc
-        .lines
-        .iter()
-        .enumerate()
-        .skip(doc.scroll)
-        .take(usize::from(body.height))
-        .map(|(n, line)| {
-            if doc.numbered {
+    let number_width = total.to_string().len();
+    let text: Vec<Line> = if let Some(buf) = &doc.buffer {
+        buf.iter()
+            .enumerate()
+            .skip(doc.scroll)
+            .take(usize::from(body.height))
+            .map(|(n, line)| {
                 let mut spans =
                     vec![Span::styled(format!("{:>number_width$} ", n + 1), Style::default().dim())];
-                spans.extend(line.spans.iter().cloned());
+                spans.push(Span::raw(line.clone()));
                 Line::from(spans)
-            } else {
-                let mut line = line.clone();
-                // Tinted diff rows fill the full row, like an editor.
-                if line.style.bg.is_some() {
-                    let pad = usize::from(body.width).saturating_sub(line.width());
-                    if pad > 0 {
-                        line.spans.push(Span::raw(" ".repeat(pad)));
+            })
+            .collect()
+    } else {
+        doc.lines
+            .iter()
+            .enumerate()
+            .skip(doc.scroll)
+            .take(usize::from(body.height))
+            .map(|(n, line)| {
+                if doc.numbered {
+                    let mut spans = vec![Span::styled(
+                        format!("{:>number_width$} ", n + 1),
+                        Style::default().dim(),
+                    )];
+                    spans.extend(line.spans.iter().cloned());
+                    Line::from(spans)
+                } else {
+                    let mut line = line.clone();
+                    // Tinted diff rows fill the full row, like an editor.
+                    if line.style.bg.is_some() {
+                        let pad = usize::from(body.width).saturating_sub(line.width());
+                        if pad > 0 {
+                            line.spans.push(Span::raw(" ".repeat(pad)));
+                        }
                     }
+                    line
                 }
-                line
-            }
-        })
-        .collect();
+            })
+            .collect()
+    };
     frame.render_widget(Paragraph::new(text), body);
 
-    frame.render_widget(
-        Paragraph::new(Line::from(" ↑↓ scroll  ⇞⇟ page  g G ends  q close".dim())),
-        footer,
-    );
+    // Place the hardware cursor on the edit position.
+    if doc.editable() {
+        doc.clamp_cursor();
+        if doc.cursor_row >= doc.scroll
+            && doc.cursor_row < doc.scroll + usize::from(body.height)
+        {
+            let y = body.y + (doc.cursor_row - doc.scroll) as u16;
+            let col_chars = doc
+                .buffer
+                .as_ref()
+                .and_then(|b| b.get(doc.cursor_row))
+                .map(|l| {
+                    let end = doc.cursor_col.min(l.len());
+                    l[..end].chars().count()
+                })
+                .unwrap_or(0);
+            let x = body.x + (number_width as u16 + 1) + col_chars as u16;
+            if x < body.x + body.width {
+                frame.set_cursor_position((x, y));
+            }
+        }
+    }
+
+    let hint = if doc.editable() {
+        let status = if doc.notice.is_empty() {
+            if doc.dirty {
+                "modified"
+            } else {
+                "edit"
+            }
+        } else {
+            doc.notice.as_str()
+        };
+        format!(" type to edit  ^s save  esc close  · {status}")
+    } else {
+        " ↑↓ scroll  ⇞⇟ page  g G ends  q close".into()
+    };
+    frame.render_widget(Paragraph::new(Line::from(hint.dim())), footer);
     usize::from(body.height).saturating_sub(1).max(1)
 }
 
 // ---------------------------------------------------------------------------
 // Client side: how the sidebar views open things in the viewer pane.
 // ---------------------------------------------------------------------------
-
-/// True for Markdown files (editable on click instead of read-only preview).
-pub fn is_markdown(path: &Path) -> bool {
-    path.extension()
-        .and_then(|e| e.to_str())
-        .is_some_and(|e| matches!(e.to_ascii_lowercase().as_str(), "md" | "markdown" | "mdx"))
-}
-
-/// TUI editor for the pane beside the tree. Never GUI (zed/code) — those
-/// leave the herdr pane empty. Prefer $VISUAL/$EDITOR only when terminal-native.
-fn resolve_tui_editor() -> String {
-    for key in ["VISUAL", "EDITOR"] {
-        if let Ok(e) = std::env::var(key) {
-            let e = e.trim();
-            if !e.is_empty() && !is_gui_editor(e) {
-                return e.to_string();
-            }
-        }
-    }
-    for cand in ["nvim", "vim", "helix", "hx", "micro", "nano", "vi"] {
-        if which(cand) {
-            return cand.to_string();
-        }
-    }
-    "vi".into()
-}
-
-fn which(bin: &str) -> bool {
-    std::env::var_os("PATH")
-        .map(|p| {
-            std::env::split_paths(&p).any(|dir| {
-                let p = dir.join(bin);
-                p.is_file()
-            })
-        })
-        .unwrap_or(false)
-}
-
-fn shell_quote(s: &str) -> String {
-    format!("'{}'", s.replace('\'', "'\\''"))
-}
-
-/// Editors that open their own window — must not run in a herdr pane.
-fn is_gui_editor(editor: &str) -> bool {
-    let base = editor
-        .split_whitespace()
-        .next()
-        .unwrap_or(editor)
-        .rsplit('/')
-        .next()
-        .unwrap_or(editor);
-    matches!(
-        base,
-        "zed" | "code" | "cursor" | "subl" | "atom" | "open" | "code-insiders" | "mate"
-    )
-}
-
-/// Open a file for editing in the pane next to the sidebar (always in-herdr).
-pub fn open_editor_in_pane(my_pane_id: &str, spawn_cwd: &Path, path: &Path) -> Result<(), String> {
-    let editor = resolve_tui_editor();
-    let path_str = path.display().to_string();
-
-    let full = crate::state::load_state().preview_full;
-    let mut pre_park_frac = owner_frac(my_pane_id);
-
-    // Close existing preview/editor viewer in this tab so we don't stack panes.
-    if let Ok(json) = ipc::call_text("pane.list", serde_json::json!({})) {
-        if let Some((id, _)) = viewer_pane_in_tab(&json, my_pane_id) {
-            let _ = ipc::call_text("pane.close", serde_json::json!({ "pane_id": id }));
-            restore_parked(my_pane_id);
-            pre_park_frac = owner_frac(my_pane_id).or(pre_park_frac);
-        }
-    }
-    if full {
-        park_others(my_pane_id);
-    }
-    let label = path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("edit")
-        .to_string();
-    // Run editor in the adjacent pane and focus it so typing works immediately.
-    let cmd = format!("exec {editor} {}", shell_quote(&path_str));
-    spawn_command_pane(
-        my_pane_id,
-        spawn_cwd,
-        &cmd,
-        &label,
-        pre_park_frac,
-        true, // focus editor pane
-    )?;
-    if full {
-        enforce_owner_width(my_pane_id, pre_park_frac.unwrap_or(0.3));
-    }
-    Ok(())
-}
 
 /// Write `payload` to the caller's control file and make sure a live viewer
 /// pane exists beside it (spawning one to our right when needed). Errors are
@@ -582,6 +850,8 @@ pub fn open_in_pane(my_pane_id: &str, spawn_cwd: &Path, payload: &str) -> Result
     let control = control_path(my_pane_id);
     std::fs::write(&control, payload).map_err(|e| format!("preview failed: {e}"))?;
     let full = crate::state::load_state().preview_full;
+    // Files are editable — focus the viewer so typing works. Diffs keep the tree focused.
+    let focus_viewer = payload.starts_with("file\t");
 
     // Measure the sidebar's width share FIRST: closing a stale viewer below
     // leaves the sidebar momentarily alone at full width, which reads as a
@@ -593,12 +863,15 @@ pub fn open_in_pane(my_pane_id: &str, spawn_cwd: &Path, payload: &str) -> Result
     // one (stale heartbeat) is closed and replaced.
     if let Ok(json) = ipc::call_text("pane.list", serde_json::json!({})) {
         match viewer_pane_in_tab(&json, my_pane_id) {
-            Some((_, false)) => {
+            Some((id, false)) => {
                 if full {
                     // Covers toggling the setting on while a preview is
                     // already open beside the sidebar.
                     park_others(my_pane_id);
                     enforce_owner_width(my_pane_id, pre_park_frac.unwrap_or(0.3));
+                }
+                if focus_viewer {
+                    let _ = ipc::call_text("pane.focus", serde_json::json!({ "pane_id": id }));
                 }
                 return Ok(());
             }
@@ -617,7 +890,7 @@ pub fn open_in_pane(my_pane_id: &str, spawn_cwd: &Path, payload: &str) -> Result
     if full {
         park_others(my_pane_id);
     }
-    spawn_viewer_pane(my_pane_id, spawn_cwd, &control, pre_park_frac)?;
+    spawn_viewer_pane(my_pane_id, spawn_cwd, &control, pre_park_frac, focus_viewer)?;
     if full {
         enforce_owner_width(my_pane_id, pre_park_frac.unwrap_or(0.3));
     }
@@ -787,6 +1060,7 @@ fn spawn_viewer_pane(
     spawn_cwd: &Path,
     control: &Path,
     pre_park_frac: Option<f64>,
+    focus_viewer: bool,
 ) -> Result<(), String> {
     let exe = std::env::current_exe()
         .map(|p| p.display().to_string())
@@ -801,7 +1075,7 @@ fn spawn_viewer_pane(
         &command,
         "Preview",
         pre_park_frac,
-        false, // keep focus on the tree
+        focus_viewer,
     )
 }
 
