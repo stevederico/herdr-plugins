@@ -486,19 +486,23 @@ pub fn is_markdown(path: &Path) -> bool {
         .is_some_and(|e| matches!(e.to_ascii_lowercase().as_str(), "md" | "markdown" | "mdx"))
 }
 
-/// `$VISUAL` / `$EDITOR`, then common GUI editors, then nvim.
-fn resolve_editor() -> String {
-    if let Ok(e) = std::env::var("VISUAL").or_else(|_| std::env::var("EDITOR")) {
-        if !e.trim().is_empty() {
-            return e;
+/// TUI editor for the pane beside the tree. Never GUI (zed/code) — those
+/// leave the herdr pane empty. Prefer $VISUAL/$EDITOR only when terminal-native.
+fn resolve_tui_editor() -> String {
+    for key in ["VISUAL", "EDITOR"] {
+        if let Ok(e) = std::env::var(key) {
+            let e = e.trim();
+            if !e.is_empty() && !is_gui_editor(e) {
+                return e.to_string();
+            }
         }
     }
-    for cand in ["zed", "code", "nvim", "vim", "nano"] {
+    for cand in ["nvim", "vim", "helix", "hx", "micro", "nano", "vi"] {
         if which(cand) {
             return cand.to_string();
         }
     }
-    "nvim".into()
+    "vi".into()
 }
 
 fn which(bin: &str) -> bool {
@@ -516,7 +520,7 @@ fn shell_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
 
-/// GUI editors that open their own window and exit — spawn detached, no herdr pane.
+/// Editors that open their own window — must not run in a herdr pane.
 fn is_gui_editor(editor: &str) -> bool {
     let base = editor
         .split_whitespace()
@@ -527,25 +531,14 @@ fn is_gui_editor(editor: &str) -> bool {
         .unwrap_or(editor);
     matches!(
         base,
-        "zed" | "code" | "cursor" | "subl" | "atom" | "open" | "code-insiders"
+        "zed" | "code" | "cursor" | "subl" | "atom" | "open" | "code-insiders" | "mate"
     )
 }
 
-/// Open a file for editing: GUI editor if configured, else a TUI editor in the
-/// preview slot (same layout as the read-only viewer).
+/// Open a file for editing in the pane next to the sidebar (always in-herdr).
 pub fn open_editor_in_pane(my_pane_id: &str, spawn_cwd: &Path, path: &Path) -> Result<(), String> {
-    let editor = resolve_editor();
+    let editor = resolve_tui_editor();
     let path_str = path.display().to_string();
-    if is_gui_editor(&editor) {
-        let status = std::process::Command::new("sh")
-            .arg("-c")
-            .arg(format!("{editor} {}", shell_quote(&path_str)))
-            .current_dir(spawn_cwd)
-            .spawn()
-            .map_err(|e| format!("editor failed: {e}"))?;
-        let _ = status; // detached
-        return Ok(());
-    }
 
     let full = crate::state::load_state().preview_full;
     let mut pre_park_frac = owner_frac(my_pane_id);
@@ -566,8 +559,16 @@ pub fn open_editor_in_pane(my_pane_id: &str, spawn_cwd: &Path, path: &Path) -> R
         .and_then(|n| n.to_str())
         .unwrap_or("edit")
         .to_string();
+    // Run editor in the adjacent pane and focus it so typing works immediately.
     let cmd = format!("exec {editor} {}", shell_quote(&path_str));
-    spawn_command_pane(my_pane_id, spawn_cwd, &cmd, &label, pre_park_frac)?;
+    spawn_command_pane(
+        my_pane_id,
+        spawn_cwd,
+        &cmd,
+        &label,
+        pre_park_frac,
+        true, // focus editor pane
+    )?;
     if full {
         enforce_owner_width(my_pane_id, pre_park_frac.unwrap_or(0.3));
     }
@@ -712,13 +713,14 @@ fn viewer_pane_in_tab(pane_list_json: &str, my_pane_id: &str) -> Option<(String,
 }
 
 /// Split a pane to the caller's right and run `command` in it.
-/// `focus_editor`: true focuses the new pane (for editing); false keeps the sidebar.
+/// `focus_new`: true focuses the new pane (editing); false keeps the sidebar.
 fn spawn_command_pane(
     my_pane_id: &str,
     spawn_cwd: &Path,
     command: &str,
     label: &str,
     pre_park_frac: Option<f64>,
+    focus_new: bool,
 ) -> Result<(), String> {
     let layout = ipc::call_text("pane.layout", serde_json::json!({ "pane_id": my_pane_id })).ok();
     let neighbor = layout.as_deref().and_then(|json| right_neighbor(json, my_pane_id));
@@ -768,11 +770,10 @@ fn spawn_command_pane(
             "tokens": { METADATA_SOURCE: crate::state::unix_now().to_string() },
         }),
     );
-    // Editor panes take focus so typing works; read-only preview keeps the tree focused.
-    let focus_id = if label == "Preview" {
-        my_pane_id
-    } else {
+    let focus_id = if focus_new {
         new_pane.as_str()
+    } else {
+        my_pane_id
     };
     let _ = ipc::call_text("pane.focus", serde_json::json!({ "pane_id": focus_id }));
     Ok(())
@@ -794,7 +795,14 @@ fn spawn_viewer_pane(
     let command = format!("& \"{exe}\" --preview \"{}\"", control.display());
     #[cfg(not(windows))]
     let command = format!("exec \"{exe}\" --preview \"{}\"", control.display());
-    spawn_command_pane(my_pane_id, spawn_cwd, &command, "Preview", pre_park_frac)
+    spawn_command_pane(
+        my_pane_id,
+        spawn_cwd,
+        &command,
+        "Preview",
+        pre_park_frac,
+        false, // keep focus on the tree
+    )
 }
 
 
