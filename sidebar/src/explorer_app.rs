@@ -194,8 +194,8 @@ pub struct App {
     /// A native folder picker running on a background thread; its result
     /// arrives here (None = cancelled).
     picking: Option<std::sync::mpsc::Receiver<Option<PathBuf>>>,
-    /// Last left-click on a folder row, for double-click → re-root.
-    last_dir_click: Option<(std::time::Instant, PathBuf)>,
+    /// Last left-click on a row, for double-click (re-root / open media).
+    last_click: Option<(std::time::Instant, PathBuf)>,
 }
 
 
@@ -255,7 +255,7 @@ impl App {
             mouse_pos: None,
             last_beat: std::time::Instant::now(),
             picking: None,
-            last_dir_click: None,
+            last_click: None,
         };
         app.apply_identity();
         app
@@ -431,10 +431,27 @@ impl App {
 
     /// Handle one key press; `Some(exit)` ends the event loop.
     pub fn on_key(&mut self, key: KeyEvent) -> Option<Exit> {
-        if key.kind != KeyEventKind::Press {
+        let nav = matches!(
+            key.code,
+            KeyCode::Up
+                | KeyCode::Down
+                | KeyCode::Left
+                | KeyCode::Right
+                | KeyCode::PageUp
+                | KeyCode::PageDown
+                | KeyCode::Home
+                | KeyCode::End
+                | KeyCode::Char('j' | 'k' | 'h' | 'l' | 'g' | 'G')
+        );
+        if key.kind == KeyEventKind::Repeat && !nav {
             return None;
         }
-        self.notice = None;
+        if key.kind != KeyEventKind::Press && key.kind != KeyEventKind::Repeat {
+            return None;
+        }
+        if key.kind == KeyEventKind::Press {
+            self.notice = None;
+        }
         if self.overlay.is_some() {
             self.overlay_key(key);
             return None;
@@ -524,21 +541,21 @@ impl App {
                 self.select(index);
                 let row = &self.rows[index];
                 let (is_dir, path) = (row.is_dir, row.path.clone());
-                // Single click: folders expand/collapse, files preview.
-                // Double-click a folder: make it the explorer root (Finder-style).
+                let now = std::time::Instant::now();
+                let is_double = self.last_click.as_ref().is_some_and(|(t, p)| {
+                    *p == path && now.duration_since(*t) < std::time::Duration::from_millis(400)
+                });
+                self.last_click = Some((now, path.clone()));
                 if is_dir {
-                    let now = std::time::Instant::now();
-                    let is_double = self.last_dir_click.as_ref().is_some_and(|(t, p)| {
-                        *p == path && now.duration_since(*t) < std::time::Duration::from_millis(400)
-                    });
-                    self.last_dir_click = Some((now, path.clone()));
+                    // Single click expands; double-click re-roots.
                     if is_double {
                         self.change_folder(&path.display().to_string());
                     } else {
                         self.toggle();
                     }
+                } else if is_double && herdr_sidebar::media::is_media(&path) {
+                    herdr_sidebar::media::open_external(&path);
                 } else {
-                    self.last_dir_click = None;
                     self.open_preview(&path);
                 }
             }
@@ -1124,6 +1141,8 @@ impl App {
     fn expand_or_enter(&mut self) {
         let Some(row) = self.selected_row() else { return };
         if !row.is_dir {
+            let path = row.path.clone();
+            self.open_preview(&path);
             return;
         }
         if row.expanded {
