@@ -1,3 +1,7 @@
+0.6.0
+
+  Anchor settings popover
+
 0.5.0
 
   Dock activity bar

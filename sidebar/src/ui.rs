@@ -91,6 +91,27 @@ pub fn hits_collapse_button(
         && column >= pane_width.saturating_sub(4)
 }
 
+/// Settings popover: sits above `anchor` (the ⚙), right-aligned to it,
+/// clamped inside `area`. Shrinks rather than covering the button.
+pub fn popover_above(area: Rect, anchor: Rect, width: u16, height: u16) -> Rect {
+    let width = width.min(area.width).max(1);
+    let bottom = if anchor.height > 0 {
+        anchor.y
+    } else {
+        area.y + area.height
+    };
+    let avail = bottom.saturating_sub(area.y).max(1);
+    let height = height.min(avail).min(area.height).max(1);
+    let y = bottom.saturating_sub(height);
+    let right = if anchor.width > 0 {
+        (anchor.x + anchor.width).min(area.x + area.width)
+    } else {
+        area.x + area.width
+    };
+    let x = right.saturating_sub(width).max(area.x);
+    Rect::new(x, y, width, height)
+}
+
 /// Theme-matched activity-bar icons: (explorer, source control). Both FA
 /// glyphs render two cells wide in the non-Mono Nerd Font — chips reserve
 /// the second cell (see the activity-bar renderer).
@@ -426,6 +447,20 @@ mod tests {
         assert!(cut.ends_with('…'));
         assert!(Span::raw(cut.as_str()).width() <= 8);
         assert_eq!(truncate_to("abc".into(), 1), "");
+    }
+
+    #[test]
+    fn settings_popover_sits_above_and_right_aligns_to_gear() {
+        let area = Rect::new(0, 0, 32, 50);
+        let gear = Rect::new(28, 47, 4, 1);
+        let popup = popover_above(area, gear, 30, 20);
+        assert_eq!(popup.x, 2, "right-aligned to the gear");
+        assert_eq!(popup.y + popup.height, gear.y, "bottom edge meets the gear");
+        assert_eq!(popup.width, 30);
+        assert_eq!(popup.height, 20);
+        let tight = popover_above(area, Rect::new(28, 5, 4, 1), 30, 20);
+        assert_eq!(tight.y, 0);
+        assert_eq!(tight.height, 5, "shrinks instead of covering the gear");
     }
 
     #[test]

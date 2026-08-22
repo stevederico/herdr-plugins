@@ -17,7 +17,7 @@ use herdr_sidebar::icons::{IconTheme, icon};
 use herdr_sidebar::state::{self as sidebar, View};
 use herdr_sidebar::ui::{
     TitleAction, ACTIVITY_BAR_ROWS, activity_icons, draw_scrollbar, gear_icon, hits,
-    hits_collapse_button,
+    hits_collapse_button, popover_above,
     input_tail, sibling_panes_of, title_action_spans, title_actions_visible,
     title_actions_width, truncate_to, wrap_footer_message, wrap_hints,
 };
@@ -906,24 +906,19 @@ impl App {
         }
     }
 
-    /// Render the centered Settings popup and remember its rect for clicks.
+    /// Render the Settings popup above the ⚙ and remember its rect for clicks.
     fn draw_settings(&mut self, frame: &mut Frame) {
         let rows = self.settings_rows();
         // The hotkey reference lives here now; the footer chips are opt-in.
         let hint_lines = wrap_hints(&self.hints(), 28, 0);
+        let gear = self.gear;
         let Some(Overlay::Settings { selected, rect }) = self.overlay.as_mut() else {
             return;
         };
         let area = frame.area();
         let width = 30.min(area.width);
-        let height =
-            (rows.len() as u16 + 5 + hint_lines.len() as u16).min(area.height);
-        let popup = Rect::new(
-            (area.width.saturating_sub(width)) / 2,
-            (area.height.saturating_sub(height)) / 3,
-            width,
-            height,
-        );
+        let height = rows.len() as u16 + 5 + hint_lines.len() as u16;
+        let popup = popover_above(area, gear, width, height);
         *rect = popup;
 
         let inner_w = usize::from(width.saturating_sub(2));
