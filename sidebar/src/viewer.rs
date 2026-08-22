@@ -891,7 +891,14 @@ fn draw_doc(frame: &mut Frame, doc: &mut Doc, theme: IconTheme) -> usize {
         doc.context.clone()
     };
     let mut spans = left;
-    spans.push(Span::styled(format!("  {shown}"), Style::default().dim()));
+    if doc.media.is_some() {
+        spans.push(Span::styled(
+            "  o  Full Resolution",
+            Style::default().bold().fg(Color::LightBlue),
+        ));
+    } else {
+        spans.push(Span::styled(format!("  {shown}"), Style::default().dim()));
+    }
     frame.render_widget(Paragraph::new(Line::from(spans)), header);
 
     if let Some(media) = doc.media.as_mut() {
@@ -916,7 +923,7 @@ fn draw_doc(frame: &mut Frame, doc: &mut Doc, theme: IconTheme) -> usize {
         if let Some(img) = &media.image {
             draw_cell_image(frame, body, img);
             frame.render_widget(
-                Paragraph::new(Line::from(" o open real png  esc close".dim())),
+                Paragraph::new(Line::from(" esc close".dim())),
                 footer,
             );
             return usize::from(body.height).max(1);
