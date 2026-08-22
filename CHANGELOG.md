@@ -1,3 +1,11 @@
+0.2.0
+
+  Snap explorer width
+  Default Material icons
+  Add media preview
+  Open full resolution
+  Repeat arrow keys
+
 0.1.0
 
   Add sidebar plugins
