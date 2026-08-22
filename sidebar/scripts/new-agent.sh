@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# New Grok in the current workspace (split, do not create a space).
+# New workspace + Grok. Cwd follows the focused pane (else ~/Desktop/projects).
 set -euo pipefail
 herdr="${HERDR_BIN_PATH:-herdr}"
 fallback="${HERDR_NEW_AGENT_CWD:-$HOME/Desktop/projects}"
@@ -33,12 +33,6 @@ def walk_pane_id(obj):
                 return found
     return None
 
-def is_chrome(p):
-    label = p.get("label") or ""
-    tokens = p.get("tokens") or {}
-    blob = " ".join(tokens.keys())
-    return label in ("Sidebar", "Explorer", "Preview", "Source Control") or "herdr-sidebar" in blob
-
 def live_names():
     data = jcmd("agent", "list")
     blob = data.get("result", data)
@@ -51,24 +45,19 @@ def live_names():
                 names.add(n)
     return names
 
-panes = (jcmd("pane", "list").get("result") or {}).get("panes") or []
-focused = next((p for p in panes if p.get("focused")), None)
-if not focused:
-    raise SystemExit("no focused pane")
-tab = focused.get("tab_id")
-cwd = focused.get("cwd") or fallback
-target = focused
-if is_chrome(target):
-    others = [p for p in panes if p.get("tab_id") == tab and not is_chrome(p)]
-    if others:
-        target = others[0]
-tid = target.get("pane_id")
-if not tid:
-    raise SystemExit("no split target")
-created = jcmd("pane", "split", tid, "--direction", "down", "--cwd", cwd, "--focus")
+cwd = fallback
+try:
+    panes = (jcmd("pane", "list").get("result") or {}).get("panes") or []
+    focused = next((p for p in panes if p.get("focused")), None)
+    if focused and focused.get("cwd"):
+        cwd = focused["cwd"]
+except Exception:
+    pass
+
+created = jcmd("workspace", "create", "--cwd", cwd, "--focus")
 pane = walk_pane_id(created)
 if not pane:
-    raise SystemExit("pane split did not return a pane id")
+    raise SystemExit("workspace create did not return a pane id")
 
 taken = live_names()
 name = kind
