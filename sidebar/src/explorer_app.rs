@@ -272,6 +272,19 @@ impl App {
         if let Some(ctl) = &self.pane_ctl {
             ctl.report_tokens(MY_VIEW, self.merged());
         }
+        self.enforce_preferred_width();
+    }
+
+    /// After the neighbor pane is closed, this pane eats the full tab.
+    /// A later `prefix+v` split is then 50/50. Snap back to ~32 cols
+    /// (~1/8 on a typical terminal) whenever we are clearly too wide
+    /// and a horizontal split exists (`resize_to` no-ops if not).
+    pub fn enforce_preferred_width(&self) {
+        let Some(ctl) = &self.pane_ctl else { return };
+        if self.last_width <= DEFAULT_EXPANDED_WIDTH.saturating_mul(2) {
+            return;
+        }
+        ctl.resize_to(self.last_width, DEFAULT_EXPANDED_WIDTH);
     }
 
     /// The merged sidebar is on and actually usable (other plugin present).

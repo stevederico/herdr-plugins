@@ -137,7 +137,11 @@ fn run_explorer(terminal: &mut ratatui::DefaultTerminal) -> std::io::Result<Exit
             let exit = match event::read()? {
                 Event::Key(key) => app.on_key(key),
                 Event::Mouse(mouse) => app.on_mouse(mouse),
-                _ => None, // resize, focus, … simply fall through to a redraw
+                Event::Resize(_, _) => {
+                    app.enforce_preferred_width();
+                    None
+                }
+                _ => None,
             };
             if let Some(exit) = exit {
                 return Ok(exit);
@@ -145,6 +149,7 @@ fn run_explorer(terminal: &mut ratatui::DefaultTerminal) -> std::io::Result<Exit
         } else {
             app.heartbeat();
             app.poll_picker();
+            app.enforce_preferred_width();
         }
     }
 }
