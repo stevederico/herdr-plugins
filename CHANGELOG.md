@@ -1,3 +1,7 @@
+0.5.0
+
+  Dock activity bar
+
 0.4.0
 
   Add markdown checkboxes

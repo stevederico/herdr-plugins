@@ -16,7 +16,8 @@ use herdr_sidebar::actions::{self, MenuAction, MenuEntry};
 use herdr_sidebar::icons::{IconTheme, icon};
 use herdr_sidebar::state::{self as sidebar, View};
 use herdr_sidebar::ui::{
-    TitleAction, activity_icons, draw_scrollbar, gear_icon, hits, hits_collapse_button,
+    TitleAction, ACTIVITY_BAR_ROWS, activity_icons, draw_scrollbar, gear_icon, hits,
+    hits_collapse_button,
     input_tail, sibling_panes_of, title_action_spans, title_actions_visible,
     title_actions_width, truncate_to, wrap_footer_message, wrap_hints,
 };
@@ -561,8 +562,13 @@ impl App {
                     self.title_action(action);
                     return None;
                 }
-                if hits_collapse_button(mouse.column, mouse.row, self.last_width, self.last_height)
-                {
+                if hits_collapse_button(
+                    mouse.column,
+                    mouse.row,
+                    self.last_width,
+                    self.last_height,
+                    if self.merged() { ACTIVITY_BAR_ROWS } else { 0 },
+                ) {
                     self.hide();
                     return None;
                 }
@@ -1255,14 +1261,14 @@ impl App {
         // the pane label ("Explorer"/"Sidebar") — a second border read as a
         // double frame.
         let footer_height = self.footer_height(frame.area().width);
-        // A breathing row above and below the icons keeps the activity bar
-        // from crowding the pane border.
-        let activity_height = if self.merged() { 3 } else { 0 };
-        let [activity, header, body, footer] = Layout::vertical([
-            Constraint::Length(activity_height),
+        // Docked at the bottom: a breathing row above and below the icons
+        // keeps the activity bar from crowding the pane border.
+        let activity_height = if self.merged() { ACTIVITY_BAR_ROWS } else { 0 };
+        let [header, body, footer, activity] = Layout::vertical([
             Constraint::Length(1),
             Constraint::Min(0),
             Constraint::Length(footer_height),
+            Constraint::Length(activity_height),
         ])
         .areas(frame.area());
         self.page = body.height.saturating_sub(1).max(1) as usize;
@@ -1308,8 +1314,8 @@ impl App {
         };
 
         // Collapse button at the bottom-right of the LAST footer line,
-        // mirroring herdr's own sidebar. hits_collapse_button targets the
-        // pane's bottom row, which is exactly that line.
+        // mirroring herdr's own sidebar. hits_collapse_button skips the
+        // activity bar docked below this footer when unified.
         let last_line = Rect::new(
             footer.x,
             footer.y + footer.height.saturating_sub(1),
@@ -1693,11 +1699,16 @@ mod tests {
 
     #[test]
     fn collapse_button_hit_region_is_header_right_edge() {
-        assert!(hits_collapse_button(30, 49, 32, 50), "footer right edge");
-        assert!(hits_collapse_button(28, 49, 32, 50));
-        assert!(!hits_collapse_button(27, 49, 32, 50), "left of the button");
-        assert!(!hits_collapse_button(30, 0, 32, 50), "header row");
-        assert!(!hits_collapse_button(30, 48, 32, 50), "tree row");
+        assert!(hits_collapse_button(30, 49, 32, 50, 0), "footer right edge");
+        assert!(hits_collapse_button(28, 49, 32, 50, 0));
+        assert!(!hits_collapse_button(27, 49, 32, 50, 0), "left of the button");
+        assert!(!hits_collapse_button(30, 0, 32, 50, 0), "header row");
+        assert!(!hits_collapse_button(30, 48, 32, 50, 0), "tree row");
+        assert!(
+            hits_collapse_button(30, 46, 32, 50, ACTIVITY_BAR_ROWS),
+            "footer sits above a 3-row activity dock"
+        );
+        assert!(!hits_collapse_button(30, 49, 32, 50, ACTIVITY_BAR_ROWS));
     }
 
     #[test]

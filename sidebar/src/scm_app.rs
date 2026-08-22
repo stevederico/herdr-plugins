@@ -26,7 +26,7 @@ use herdr_sidebar::icons::{IconTheme, icon};
 use herdr_sidebar::state::{self as sidebar, View};
 use herdr_sidebar::state::Exit;
 use herdr_sidebar::ui::{
-    TitleAction, activity_icons, branch_icon, draw_scrollbar, gear_icon, hits,
+    TitleAction, ACTIVITY_BAR_ROWS, activity_icons, branch_icon, draw_scrollbar, gear_icon, hits,
     hits_collapse_button, sibling_panes_of, sparkle_icon, title_action_spans,
     title_actions_visible, title_actions_width, truncate_to, within, wrap_footer_message,
     wrap_hints,
@@ -1015,7 +1015,13 @@ impl App {
 
     fn left_click(&mut self, mouse: MouseEvent) -> Option<Exit> {
         self.flash = None;
-        if hits_collapse_button(mouse.column, mouse.row, self.last_width, self.last_height) {
+        if hits_collapse_button(
+            mouse.column,
+            mouse.row,
+            self.last_width,
+            self.last_height,
+            if self.merged() { ACTIVITY_BAR_ROWS } else { 0 },
+        ) {
             self.hide();
             return None;
         }
@@ -2139,17 +2145,17 @@ impl App {
         let button_height = if multi { 0 } else { 3 };
         let sync_height = u16::from(!multi && self.sync_label().is_some());
         let footer_lines = self.footer_lines(area.width);
-        // A breathing row above and below the icons keeps the activity bar
-        // from crowding the pane border.
-        let activity_height = if self.merged() { 3 } else { 0 };
-        let [activity, header, message, button, sync, list, footer] = Layout::vertical([
-            Constraint::Length(activity_height),
+        // Docked at the bottom: a breathing row above and below the icons
+        // keeps the activity bar from crowding the pane border.
+        let activity_height = if self.merged() { ACTIVITY_BAR_ROWS } else { 0 };
+        let [header, message, button, sync, list, footer, activity] = Layout::vertical([
             Constraint::Length(1),
             Constraint::Length(message_height),
             Constraint::Length(button_height),
             Constraint::Length(sync_height),
             Constraint::Min(0),
             Constraint::Length((footer_lines.len() as u16).max(1)),
+            Constraint::Length(activity_height),
         ])
         .areas(area);
         self.page = list.height.saturating_sub(1).max(1) as usize;
