@@ -384,6 +384,28 @@ impl Doc {
             Err(e) => self.notice = format!("save failed: {e}"),
         }
     }
+
+    /// Click a rendered task-list row: flip `[ ]`/`[x]` in the buffer and save.
+    fn toggle_md_task(&mut self, rendered_row: usize) {
+        if !self.md_render {
+            return;
+        }
+        let Some(buf) = &self.buffer else { return };
+        let src = buf.join("\n");
+        let Some(hit) = crate::md::render_full(&src)
+            .tasks
+            .into_iter()
+            .find(|t| t.row == rendered_row)
+        else {
+            return;
+        };
+        let Some(buf) = &mut self.buffer else { return };
+        let Some(line) = buf.get(hit.src_line) else { return };
+        let Some(next) = crate::md::toggle_task_line(line) else { return };
+        buf[hit.src_line] = next;
+        self.dirty = true;
+        self.save();
+    }
 }
 
 fn load(request: &Request) -> Doc {
@@ -834,6 +856,13 @@ pub fn run(control: &Path) -> std::io::Result<()> {
                             break Ok(());
                         }
                     }
+                    MouseEventKind::Down(MouseButton::Left) if doc.md_render && mouse.row >= 1 => {
+                        let h = terminal.size()?.height;
+                        if mouse.row + 1 < h {
+                            let row = doc.scroll + usize::from(mouse.row.saturating_sub(1));
+                            doc.toggle_md_task(row);
+                        }
+                    }
                     MouseEventKind::Down(MouseButton::Left) if doc.editable() && mouse.row >= 1 => {
                         // Click to place cursor (row under header).
                         let row = usize::from(mouse.row.saturating_sub(1)) + doc.scroll;
@@ -1072,7 +1101,7 @@ fn draw_doc(frame: &mut Frame, doc: &mut Doc, theme: IconTheme) -> usize {
         };
         format!(" type to edit  ^s save  esc close  · {status}")
     } else if doc.md_render {
-        " m raw  esc close".into()
+        " click box  m raw  esc close".into()
     } else {
         if doc.path.as_deref().is_some_and(crate::media::is_media) {
             " o open in Preview  esc close".into()

@@ -1,3 +1,7 @@
+0.4.0
+
+  Add markdown checkboxes
+
 0.3.1
 
   Fix up-arrow glyph

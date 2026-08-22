@@ -1,4 +1,5 @@
 //! Tiny markdown → ratatui lines. Headings, lists, fences, inline ** * `.
+//! Task items (`- [ ]` / `- [x]`) are clickable in the preview.
 
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -13,10 +14,27 @@ pub fn is_markdown(path: &std::path::Path) -> bool {
     )
 }
 
+/// A rendered task-list row the preview can click to toggle.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TaskHit {
+    pub row: usize,
+    pub src_line: usize,
+}
+
+pub struct Rendered {
+    pub lines: Vec<Line<'static>>,
+    pub tasks: Vec<TaskHit>,
+}
+
 pub fn render(src: &str) -> Vec<Line<'static>> {
+    render_full(src).lines
+}
+
+pub fn render_full(src: &str) -> Rendered {
     let mut out = Vec::new();
+    let mut tasks = Vec::new();
     let mut fence: Option<String> = None;
-    for raw in src.lines() {
+    for (src_line, raw) in src.lines().enumerate() {
         let line = raw.trim_end();
         if let Some(rest) = line.strip_prefix("```") {
             if fence.is_some() {
@@ -64,9 +82,35 @@ pub fn render(src: &str) -> Vec<Line<'static>> {
             out.push(Line::from(spans));
             continue;
         }
-        if let Some(rest) = unordered(line) {
-            let mut spans = vec![Span::styled("• ", Style::default().fg(Color::LightBlue))];
-            spans.extend(inline(rest, Style::default()));
+        if let Some(start) = unordered_prefix(line) {
+            let indent = leading_ws(line);
+            let body = &line[start..];
+            if let Some((checked, text)) = parse_task(body) {
+                let boxg = if checked { "☑ " } else { "☐ " };
+                let box_style = if checked {
+                    Style::default().fg(Color::Rgb(0x89, 0xb4, 0x82))
+                } else {
+                    Style::default().fg(Color::LightBlue)
+                };
+                let text_style = if checked {
+                    Style::default().fg(Color::Rgb(0x9e, 0xaa, 0xb6))
+                } else {
+                    Style::default()
+                };
+                let mut spans = vec![
+                    Span::raw(" ".repeat(indent)),
+                    Span::styled(boxg, box_style),
+                ];
+                spans.extend(inline(text, text_style));
+                tasks.push(TaskHit { row: out.len(), src_line });
+                out.push(Line::from(spans));
+                continue;
+            }
+            let mut spans = vec![
+                Span::raw(" ".repeat(indent)),
+                Span::styled("• ", Style::default().fg(Color::LightBlue)),
+            ];
+            spans.extend(inline(body, Style::default()));
             out.push(Line::from(spans));
             continue;
         }
@@ -79,7 +123,16 @@ pub fn render(src: &str) -> Vec<Line<'static>> {
     if out.is_empty() {
         out.push(Line::raw(""));
     }
-    out
+    Rendered { lines: out, tasks }
+}
+
+/// Flip `[ ]` ↔ `[x]` on a list task line. `None` if it is not a task item.
+pub fn toggle_task_line(line: &str) -> Option<String> {
+    let start = unordered_prefix(line)?;
+    let (checked, _) = parse_task(&line[start..])?;
+    let mut out = line.to_string();
+    out.replace_range(start + 1..start + 2, if checked { " " } else { "x" });
+    Some(out)
 }
 
 fn heading_level(line: &str) -> Option<usize> {
@@ -95,13 +148,34 @@ fn heading_level(line: &str) -> Option<usize> {
     }
 }
 
-fn unordered(line: &str) -> Option<&str> {
+fn leading_ws(line: &str) -> usize {
+    line.bytes().take_while(|b| *b == b' ' || *b == b'\t').count()
+}
+
+/// Byte index of the list body after `- ` / `* ` / `+ `, allowing indent.
+fn unordered_prefix(line: &str) -> Option<usize> {
+    let i = leading_ws(line);
+    let rest = &line[i..];
     for p in ["- ", "* ", "+ "] {
-        if let Some(rest) = line.strip_prefix(p) {
-            return Some(rest);
+        if rest.starts_with(p) {
+            return Some(i + p.len());
         }
     }
     None
+}
+
+fn parse_task(body: &str) -> Option<(bool, &str)> {
+    let b = body.as_bytes();
+    if b.len() < 3 || b[0] != b'[' || b[2] != b']' {
+        return None;
+    }
+    let checked = match b[1] {
+        b' ' => false,
+        b'x' | b'X' => true,
+        _ => return None,
+    };
+    let rest = &body[3..];
+    Some((checked, rest.strip_prefix(' ').unwrap_or(rest)))
 }
 
 fn inline(src: &str, base: Style) -> Vec<Span<'static>> {
@@ -206,5 +280,33 @@ mod tests {
         let lines = render("# Hi\n\n- one\n");
         assert!(lines[0].spans.iter().any(|s| s.content == "Hi"));
         assert!(lines.iter().any(|l| l.spans.iter().any(|s| s.content.contains("one"))));
+    }
+
+    #[test]
+    fn task_items_render_and_map_source() {
+        let md = render_full("- [ ] open\n- [x] done\n  - [ ] nested\n");
+        assert_eq!(md.tasks.len(), 3);
+        assert_eq!(md.tasks[0], TaskHit { row: 0, src_line: 0 });
+        assert_eq!(md.tasks[2].src_line, 2);
+        let joined: String = md.lines.iter().flat_map(|l| l.spans.iter().map(|s| s.content.as_ref())).collect();
+        assert!(joined.contains('☐'), "{joined}");
+        assert!(joined.contains('☑'), "{joined}");
+        assert!(joined.contains("nested"), "{joined}");
+    }
+
+    #[test]
+    fn tasks_inside_fences_are_not_clickable() {
+        let md = render_full("```\n- [ ] no\n```\n- [ ] yes\n");
+        assert_eq!(md.tasks, vec![TaskHit { row: 3, src_line: 3 }]);
+    }
+
+    #[test]
+    fn toggle_task_line_flips_marker() {
+        assert_eq!(toggle_task_line("- [ ] a").as_deref(), Some("- [x] a"));
+        assert_eq!(toggle_task_line("- [x] a").as_deref(), Some("- [ ] a"));
+        assert_eq!(toggle_task_line("* [X] a").as_deref(), Some("* [ ] a"));
+        assert_eq!(toggle_task_line("  - [ ] nested").as_deref(), Some("  - [x] nested"));
+        assert_eq!(toggle_task_line("- not a task"), None);
+        assert_eq!(toggle_task_line("- [link](url)"), None);
     }
 }
