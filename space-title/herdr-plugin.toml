@@ -1,0 +1,28 @@
+id = "herdr-space-title"
+name = "herdr-space-title"
+version = "0.1.0"
+description = "Rename spaces from the Grok/agent session title"
+min_herdr_version = "0.7.0"
+platforms = ["linux", "macos"]
+
+[[events]]
+on = "pane.focused"
+command = ["bash", "scripts/sync.sh"]
+
+[[events]]
+on = "tab.focused"
+command = ["bash", "scripts/sync.sh"]
+
+[[events]]
+on = "workspace.focused"
+command = ["bash", "scripts/sync.sh"]
+
+[[events]]
+on = "pane.agent_status_changed"
+command = ["bash", "scripts/sync.sh"]
+
+[[actions]]
+id = "sync"
+title = "Sync Space Titles"
+description = "Rename workspaces from agent terminal titles"
+command = ["bash", "scripts/sync.sh"]

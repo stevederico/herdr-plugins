@@ -6,6 +6,7 @@ Steve’s local [herdr](https://herdr.dev) plugins in one repo.
 |-----|-----------|------|
 | `sidebar/` | `herdr-sidebar` | VS Code-style explorer + SCM (single-click folders) |
 | `git-badge/` | `herdr-git-badge` | Spaces `*` when worktree is dirty |
+| `space-title/` | `herdr-space-title` | Rename spaces from Grok session titles |
 | `explorer/` | `herdr-explorer` | Thin file tree (optional; usually disabled) |
 
 ## Link (dev)
@@ -14,6 +15,7 @@ Steve’s local [herdr](https://herdr.dev) plugins in one repo.
 herdr plugin uninstall herdr-sidebar   # if still GitHub-managed
 herdr plugin link ~/Desktop/projects/herdr-plugins/sidebar
 herdr plugin link ~/Desktop/projects/herdr-plugins/git-badge
+herdr plugin link ~/Desktop/projects/herdr-plugins/space-title
 herdr plugin link ~/Desktop/projects/herdr-plugins/explorer   # optional
 herdr plugin disable herdr-explorer    # if you only want sidebar
 ```
