@@ -18,7 +18,7 @@ use crossterm::event::{
     MouseButton, MouseEventKind,
 };
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Layout};
+use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
@@ -123,6 +123,7 @@ struct Doc {
     /// File previews get a line-number gutter; diffs carry their own +/-.
     numbered: bool,
     scroll: usize,
+    media: Option<crate::media::MediaState>,
 }
 
 impl Doc {
@@ -139,6 +140,7 @@ impl Doc {
             notice: String::new(),
             numbered: false,
             scroll: 0,
+            media: None,
         }
     }
 
@@ -393,42 +395,23 @@ fn load_media(target: &Path) -> Doc {
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| target.display().to_string());
     let kind = if crate::media::is_video(target) { "video" } else { "image" };
-    let (lines, notice) = match crate::media::rasterize(target) {
-        Ok((png, w, h)) => {
-            let gfx = crate::media::show(&png, w, h);
-            let mut lines = vec![
-                Line::raw(format!("{kind}  {w}×{h}")),
-                Line::raw(target.display().to_string()),
-            ];
-            let notice = match gfx {
-                Ok(()) => "o opens in Preview".into(),
-                Err(_) => {
-                    lines.push(Line::raw("(in-pane graphics off — press o)"));
-                    "o opens in Preview".into()
-                }
-            };
-            (lines, notice)
-        }
-        Err(e) => (
-            vec![
-                Line::raw(format!("({e})")),
-                Line::raw("press o to open in Preview"),
-            ],
-            String::new(),
-        ),
-    };
     Doc {
         name,
-        context: target.display().to_string(),
-        lines,
+        context: format!("{kind} — {}", target.display()),
+        lines: vec![Line::raw("decoding…")],
         buffer: None,
         path: Some(target.to_path_buf()),
         cursor_row: 0,
         cursor_col: 0,
         dirty: false,
-        notice,
+        notice: String::new(),
         numbered: false,
         scroll: 0,
+        media: Some(crate::media::MediaState {
+            path: target.to_path_buf(),
+            image: None,
+            fit: (0, 0),
+        }),
     }
 }
 
@@ -478,6 +461,7 @@ fn load_show(root: &Path, spec: &str, path: Option<&str>) -> Doc {
         notice: String::new(),
         numbered: false,
         scroll: 0,
+        media: None,
     }
 }
 
@@ -499,6 +483,7 @@ fn load_file(target: &Path) -> Doc {
             notice: String::new(),
             numbered: true,
             scroll: 0,
+            media: None,
         },
         Ok(bytes) => {
             let head = &bytes[..bytes.len().min(8192)];
@@ -515,6 +500,7 @@ fn load_file(target: &Path) -> Doc {
                     notice: String::new(),
                     numbered: true,
                     scroll: 0,
+                    media: None,
                 };
             }
             let truncated = bytes.len() > MAX_BYTES;
@@ -540,6 +526,7 @@ fn load_file(target: &Path) -> Doc {
                 notice,
                 numbered: true,
                 scroll: 0,
+                media: None,
             }
         }
     }
@@ -601,6 +588,7 @@ fn load_diff(root: &Path, rel: &str, kind: &str) -> Doc {
         notice: String::new(),
         numbered: false,
         scroll: 0,
+        media: None,
     }
 }
 
@@ -901,6 +889,35 @@ fn draw_doc(frame: &mut Frame, doc: &mut Doc, theme: IconTheme) -> usize {
     spans.push(Span::styled(format!("  {shown}"), Style::default().dim()));
     frame.render_widget(Paragraph::new(Line::from(spans)), header);
 
+    if let Some(media) = doc.media.as_mut() {
+        let fit = (body.width, body.height);
+        if media.fit != fit && fit.0 >= 2 && fit.1 >= 1 {
+            match crate::media::rasterize_cells(&media.path, fit.0, fit.1) {
+                Ok(img) => {
+                    media.image = Some(img);
+                    doc.notice.clear();
+                }
+                Err(e) => {
+                    doc.lines = vec![
+                        Line::raw(format!("({e})")),
+                        Line::raw("press o to open in Preview"),
+                    ];
+                    media.image = None;
+                    doc.notice = e;
+                }
+            }
+            media.fit = fit;
+        }
+        if let Some(img) = &media.image {
+            draw_cell_image(frame, body, img);
+            frame.render_widget(
+                Paragraph::new(Line::from(" o open original  esc close".dim())),
+                footer,
+            );
+            return usize::from(body.height).max(1);
+        }
+    }
+
     let number_width = total.to_string().len();
     let text: Vec<Line> = if let Some(buf) = &doc.buffer {
         buf.iter()
@@ -987,6 +1004,27 @@ fn draw_doc(frame: &mut Frame, doc: &mut Doc, theme: IconTheme) -> usize {
     };
     frame.render_widget(Paragraph::new(Line::from(hint.dim())), footer);
     usize::from(body.height).saturating_sub(1).max(1)
+}
+
+fn draw_cell_image(frame: &mut Frame, area: Rect, img: &crate::media::CellImage) {
+    let rows = usize::from(img.rows.min(area.height));
+    let cols = usize::from(img.cols.min(area.width));
+    let mut lines = Vec::with_capacity(rows);
+    for y in 0..rows {
+        let mut spans = Vec::with_capacity(cols);
+        for x in 0..cols {
+            let i = y * usize::from(img.cols) + x;
+            let (ur, ug, ub, lr, lg, lb) = img.cells[i];
+            spans.push(Span::styled(
+                "▀",
+                Style::default()
+                    .fg(Color::Rgb(ur, ug, ub))
+                    .bg(Color::Rgb(lr, lg, lb)),
+            ));
+        }
+        lines.push(Line::from(spans));
+    }
+    frame.render_widget(Paragraph::new(lines), area);
 }
 
 // ---------------------------------------------------------------------------
