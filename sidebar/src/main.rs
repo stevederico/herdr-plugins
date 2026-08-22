@@ -47,6 +47,10 @@ fn main() -> std::io::Result<()> {
             println!("{}", launch::focused_tab(&read_stdin()?));
             return Ok(());
         }
+        Some("--agent-cwd") => {
+            println!("{}", launch::agent_cwd(&read_stdin()?));
+            return Ok(());
+        }
         Some("--preview") => {
             let Some(control) = std::env::args().nth(2) else {
                 eprintln!("herdr-sidebar: --preview needs a control-file path");
@@ -58,7 +62,7 @@ fn main() -> std::io::Result<()> {
         Some(other) => {
             eprintln!("herdr-sidebar: unknown argument `{other}`");
             eprintln!(
-                "usage: herdr-sidebar [--view explorer|git|--preview <ctl>|--launch-decision [git]|--focused-pane|--open-plan|--focused-tab]"
+                "usage: herdr-sidebar [--view explorer|git|--preview <ctl>|--launch-decision [git]|--focused-pane|--open-plan|--focused-tab|--agent-cwd]"
             );
             std::process::exit(2);
         }
@@ -129,6 +133,7 @@ fn read_stdin() -> std::io::Result<String> {
 fn run_explorer(terminal: &mut ratatui::DefaultTerminal) -> std::io::Result<Exit> {
     let root = std::env::current_dir()?;
     let mut app = explorer_app::App::new(root);
+    app.follow_agent_cwd();
     loop {
         terminal.draw(|frame| app.draw(frame))?;
         // 500ms: quick enough that a finished folder pick lands promptly,

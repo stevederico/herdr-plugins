@@ -272,7 +272,36 @@ impl App {
         if let Some(ctl) = &self.pane_ctl {
             ctl.report_tokens(MY_VIEW, self.merged());
         }
+        self.follow_agent_cwd();
         self.enforce_preferred_width();
+    }
+
+    /// Root the tree at the agent pane's stable `cwd` (not live foreground
+    /// cwd). Leave the user alone if they drilled into a subfolder.
+    pub fn follow_agent_cwd(&mut self) {
+        if self.overlay.is_some() {
+            return;
+        }
+        let Some(id) = self.pane_ctl.as_ref().map(|c| c.pane_id.as_str()) else {
+            return;
+        };
+        let Ok(json) = herdr_sidebar::ipc::call_text("pane.list", serde_json::json!({})) else {
+            return;
+        };
+        let cwd = herdr_sidebar::launch::sibling_agent_cwd(&json, id);
+        if cwd.is_empty() {
+            return;
+        }
+        let cwd = std::path::PathBuf::from(cwd);
+        if !cwd.is_dir() {
+            return;
+        }
+        let cwd = cwd.canonicalize().unwrap_or(cwd);
+        let root = self.tree.root_path();
+        if root == cwd || root.starts_with(&cwd) {
+            return;
+        }
+        self.change_folder(&cwd.display().to_string());
     }
 
     /// After the neighbor pane is closed, this pane eats the full tab.

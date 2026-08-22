@@ -1,3 +1,7 @@
+0.3.0
+
+  Follow agent cwd
+
 0.2.0
 
   Snap explorer width

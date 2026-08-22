@@ -59,6 +59,8 @@ open_pane() {
   fp="$(printf '%s' "$panes" | "$bin" --focused-pane 2>/dev/null || true)"
   fid="${fp%%	*}"
   fcwd="${fp#*	}"
+  acwd="$(printf '%s' "$panes" | "$bin" --agent-cwd 2>/dev/null || true)"
+  [ -n "$acwd" ] && fcwd="$acwd"
   if [ -z "$fid" ]; then
     "$herdr_bin" plugin pane open --plugin herdr-sidebar \
       --entrypoint filetree --placement split --direction right --focus

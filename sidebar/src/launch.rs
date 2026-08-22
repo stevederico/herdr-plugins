@@ -40,6 +40,8 @@ struct Pane {
     #[serde(default)]
     focused: bool,
     tab_id: Option<String>,
+    #[serde(default)]
+    agent: Option<String>,
     /// Metadata tokens reported via `pane.report_metadata`; shape of the
     /// values is host-defined, only key presence matters here.
     #[serde(default)]
@@ -64,6 +66,16 @@ impl Pane {
     /// moments before the TUI stamps its first token, so this can race a
     /// fresh spawn for ~a second — REPLACE just respawns, and the next pass
     /// sees a live token, so the race self-heals.)
+    fn is_chrome(&self) -> bool {
+        self.is_explorer()
+            || self.tokens.contains_key(SC_METADATA_SOURCE)
+            || self.tokens.contains_key("herdr-sidebar-preview")
+            || matches!(
+                self.label.as_deref(),
+                Some("Sidebar" | "Explorer" | "Preview" | "Source Control")
+            )
+    }
+
     fn our_label_without_token(&self) -> bool {
         matches!(self.label.as_deref(), Some("Sidebar" | "Explorer"))
             && !self.tokens.contains_key(METADATA_SOURCE)
@@ -251,6 +263,56 @@ pub fn focused_pane(pane_list_json: &str) -> String {
         .map(strip_verbatim)
         .unwrap_or_default();
     format!("{id}\t{cwd}")
+}
+
+/// Stable project cwd of the first agent (or first non-chrome pane) in the
+/// focused tab. Uses pane `cwd`, never `foreground_cwd`, so we don't chase
+/// the agent into /tmp while it works.
+pub fn agent_cwd(pane_list_json: &str) -> String {
+    let Ok(msg) = serde_json::from_str::<PaneListMsg>(strip_bom(pane_list_json)) else {
+        return String::new();
+    };
+    let Some(focused) = msg.result.panes.iter().find(|p| p.focused) else {
+        return String::new();
+    };
+    let Some(tab) = focused.tab_id.as_deref() else {
+        return String::new();
+    };
+    cwd_in_tab(&msg.result.panes, tab)
+}
+
+/// Same as [`agent_cwd`] but keyed by an explorer pane id (heartbeat follow).
+pub fn sibling_agent_cwd(pane_list_json: &str, explorer_pane_id: &str) -> String {
+    let Ok(msg) = serde_json::from_str::<PaneListMsg>(strip_bom(pane_list_json)) else {
+        return String::new();
+    };
+    let Some(tab) = msg
+        .result
+        .panes
+        .iter()
+        .find(|p| p.pane_id.as_deref() == Some(explorer_pane_id))
+        .and_then(|p| p.tab_id.as_deref())
+    else {
+        return String::new();
+    };
+    cwd_in_tab(&msg.result.panes, tab)
+}
+
+fn cwd_in_tab(panes: &[Pane], tab: &str) -> String {
+    let in_tab: Vec<&Pane> = panes
+        .iter()
+        .filter(|p| p.tab_id.as_deref() == Some(tab) && !p.is_chrome())
+        .collect();
+    let pick = in_tab
+        .iter()
+        .find(|p| p.agent.as_deref().is_some_and(|a| !a.is_empty()))
+        .copied()
+        .or_else(|| in_tab.first().copied());
+    pick.and_then(|p| p.cwd.as_deref())
+        .map(strip_verbatim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or_default()
+        .to_string()
 }
 
 /// `<pane_id>\t<ratio>` for the left dock: the leftmost pane of the layout (the
@@ -713,5 +775,31 @@ mod tests {
         assert_eq!(open_plan(&layout("")), "");
         let unsafe_id = layout(r#"{"pane_id":"--x","rect":{"x":0,"y":0,"width":90,"height":50}}"#);
         assert_eq!(open_plan(&unsafe_id), "");
+    }
+
+    fn tab_with_chrome_and_agent() -> String {
+        pane_list(
+            r#"{"pane_id":"e","label":"Explorer","tab_id":"w1:t1","cwd":"/projects","focused":true,"tokens":{"herdr-sidebar-explorer":1}},
+               {"pane_id":"a","tab_id":"w1:t1","cwd":"/projects/scratchpad","foreground_cwd":"/tmp/tool","agent":"grok"},
+               {"pane_id":"v","label":"todo.md","tab_id":"w1:t1","cwd":"/projects/scratchpad","tokens":{"herdr-sidebar-preview":1}}"#,
+        )
+    }
+
+    #[test]
+    fn agent_cwd_is_stable_project_dir() {
+        let json = tab_with_chrome_and_agent();
+        assert_eq!(agent_cwd(&json), "/projects/scratchpad");
+        assert_eq!(sibling_agent_cwd(&json, "e"), "/projects/scratchpad");
+        assert_eq!(agent_cwd("not json"), "");
+        assert_eq!(sibling_agent_cwd(&json, "missing"), "");
+    }
+
+    #[test]
+    fn agent_cwd_skips_chrome_and_falls_back_to_first_pane() {
+        let json = pane_list(
+            r#"{"pane_id":"e","label":"Explorer","tab_id":"w1:t1","cwd":"/projects","focused":true,"tokens":{"herdr-sidebar-explorer":1}},
+               {"pane_id":"s","tab_id":"w1:t1","cwd":"/projects/other"}"#,
+        );
+        assert_eq!(agent_cwd(&json), "/projects/other");
     }
 }

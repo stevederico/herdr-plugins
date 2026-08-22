@@ -42,6 +42,8 @@ tab="$(printf '%s' "$panes" | "$bin" --focused-tab 2>/dev/null || true)"
 fp="$(printf '%s' "$panes" | "$bin" --focused-pane 2>/dev/null || true)"
 fid="${fp%%	*}"
 fcwd="${fp#*	}"
+acwd="$(printf '%s' "$panes" | "$bin" --agent-cwd 2>/dev/null || true)"
+[ -n "$acwd" ] && fcwd="$acwd"
 [ -n "$fid" ] || exit 0
 
 target="$fid"
