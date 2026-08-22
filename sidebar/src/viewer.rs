@@ -124,6 +124,10 @@ struct Doc {
     numbered: bool,
     scroll: usize,
     media: Option<crate::media::MediaState>,
+    /// Markdown rendered view (false = raw edit).
+    md_render: bool,
+    /// Header chip columns for the Raw/Rendered toggle (exclusive end).
+    md_toggle: Option<(u16, u16)>,
 }
 
 impl Doc {
@@ -141,10 +145,21 @@ impl Doc {
             numbered: false,
             scroll: 0,
             media: None,
+            md_render: false,
+            md_toggle: None,
         }
     }
 
+    fn is_markdown(&self) -> bool {
+        self.path.as_deref().is_some_and(crate::md::is_markdown)
+    }
+
     fn line_count(&self) -> usize {
+        if self.md_render {
+            if let Some(buf) = &self.buffer {
+                return crate::md::render(&buf.join("\n")).len().max(1);
+            }
+        }
         if let Some(buf) = &self.buffer {
             buf.len().max(1)
         } else {
@@ -153,7 +168,7 @@ impl Doc {
     }
 
     fn editable(&self) -> bool {
-        self.buffer.is_some() && self.path.is_some()
+        self.buffer.is_some() && self.path.is_some() && !self.md_render
     }
 
     fn clamp_cursor(&mut self) {
@@ -412,6 +427,8 @@ fn load_media(target: &Path) -> Doc {
             image: None,
             fit: (0, 0),
         }),
+        md_render: false,
+        md_toggle: None,
     }
 }
 
@@ -462,6 +479,8 @@ fn load_show(root: &Path, spec: &str, path: Option<&str>) -> Doc {
         numbered: false,
         scroll: 0,
         media: None,
+        md_render: false,
+        md_toggle: None,
     }
 }
 
@@ -484,6 +503,8 @@ fn load_file(target: &Path) -> Doc {
             numbered: true,
             scroll: 0,
             media: None,
+            md_render: false,
+            md_toggle: None,
         },
         Ok(bytes) => {
             let head = &bytes[..bytes.len().min(8192)];
@@ -501,6 +522,8 @@ fn load_file(target: &Path) -> Doc {
                     numbered: true,
                     scroll: 0,
                     media: None,
+                    md_render: false,
+                    md_toggle: None,
                 };
             }
             let truncated = bytes.len() > MAX_BYTES;
@@ -527,6 +550,8 @@ fn load_file(target: &Path) -> Doc {
                 numbered: true,
                 scroll: 0,
                 media: None,
+                md_render: crate::md::is_markdown(target),
+                md_toggle: None,
             }
         }
     }
@@ -589,6 +614,8 @@ fn load_diff(root: &Path, rel: &str, kind: &str) -> Doc {
         numbered: false,
         scroll: 0,
         media: None,
+        md_render: false,
+        md_toggle: None,
     }
 }
 
@@ -701,6 +728,10 @@ pub fn run(control: &Path) -> std::io::Result<()> {
                                 crate::media::open_external(path);
                             }
                         }
+                        KeyCode::Char('m') if doc.is_markdown() => {
+                            doc.md_render = !doc.md_render;
+                            doc.scroll = 0;
+                        }
                         KeyCode::Up => {
                             if doc.editable() {
                                 doc.move_up();
@@ -791,8 +822,17 @@ pub fn run(control: &Path) -> std::io::Result<()> {
                         doc.scroll = (doc.scroll + 3).min(max);
                     }
                     MouseEventKind::Down(MouseButton::Left) if mouse.row == 0 => {
-                        close_own_pane(control);
-                        break Ok(());
+                        if let Some((a, b)) = doc.md_toggle {
+                            if mouse.column >= a && mouse.column < b {
+                                doc.md_render = !doc.md_render;
+                                doc.scroll = 0;
+                                continue;
+                            }
+                        }
+                        if mouse.column < 4 {
+                            close_own_pane(control);
+                            break Ok(());
+                        }
                     }
                     MouseEventKind::Down(MouseButton::Left) if doc.editable() && mouse.row >= 1 => {
                         // Click to place cursor (row under header).
@@ -891,10 +931,24 @@ fn draw_doc(frame: &mut Frame, doc: &mut Doc, theme: IconTheme) -> usize {
         doc.context.clone()
     };
     let mut spans = left;
+    doc.md_toggle = None;
     if doc.media.is_some() {
         spans.push(Span::styled(
             "  o  Full Resolution",
             Style::default().bold().fg(Color::LightBlue),
+        ));
+    } else if doc.is_markdown() {
+        let chip = if doc.md_render { " Rendered " } else { " Raw " };
+        let start = used as u16 + 2;
+        let w = Span::raw(chip).width() as u16;
+        doc.md_toggle = Some((start, start + w));
+        spans.push(Span::raw("  "));
+        spans.push(Span::styled(
+            chip,
+            Style::default()
+                .bold()
+                .fg(Color::LightBlue)
+                .bg(crate::ui::KEYCAP_BG),
         ));
     } else {
         spans.push(Span::styled(format!("  {shown}"), Style::default().dim()));
@@ -931,7 +985,17 @@ fn draw_doc(frame: &mut Frame, doc: &mut Doc, theme: IconTheme) -> usize {
     }
 
     let number_width = total.to_string().len();
-    let text: Vec<Line> = if let Some(buf) = &doc.buffer {
+    let text: Vec<Line> = if doc.md_render {
+        if let Some(buf) = &doc.buffer {
+            crate::md::render(&buf.join("\n"))
+                .into_iter()
+                .skip(doc.scroll)
+                .take(usize::from(body.height))
+                .collect()
+        } else {
+            Vec::new()
+        }
+    } else if let Some(buf) = &doc.buffer {
         buf.iter()
             .enumerate()
             .skip(doc.scroll)
@@ -1007,6 +1071,8 @@ fn draw_doc(frame: &mut Frame, doc: &mut Doc, theme: IconTheme) -> usize {
             doc.notice.as_str()
         };
         format!(" type to edit  ^s save  esc close  · {status}")
+    } else if doc.md_render {
+        " m raw  esc close".into()
     } else {
         if doc.path.as_deref().is_some_and(crate::media::is_media) {
             " o open in Preview  esc close".into()
