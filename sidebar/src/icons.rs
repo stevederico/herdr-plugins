@@ -1,12 +1,8 @@
 //! File-type icons, VS Code Explorer style, in two selectable themes:
 //!
-//! - `Emoji` (default): colored emoji, renders in any terminal font. Avoids
-//!   variation-selector (VS16) sequences — their rendered width is inconsistent
-//!   across terminal emulators and would misalign the tree columns.
-//! - `Material`: Nerd Font glyphs colored like the VS Code "Atom Material Icons"
-//!   theme. Requires herdr's terminal font to be Nerd-Font-patched; the `i` key
-//!   toggles themes live, so a font without the glyphs is one keypress away from
-//!   emoji again.
+//! - `Material` (default): Nerd Font glyphs colored like the VS Code "Atom
+//!   Material Icons" theme. Needs a Nerd-Font-patched terminal font.
+//! - `Emoji`: colored emoji, renders in any font. The `i` key toggles live.
 //!
 //! Classification happens once (`Kind`), so both themes always agree on what a
 //! file is and only differ in how they draw it.
@@ -29,18 +25,10 @@ impl IconTheme {
         }
     }
 
-    /// Pick the startup theme: env override → the user's persisted choice →
-    /// Material only when a Nerd Font looks installed, else Emoji. A TUI
-    /// CANNOT observe whether the terminal font actually renders a glyph
-    /// (missing glyphs still occupy their cells), so "is any Nerd Font
-    /// installed" is the best signal available — and a wrong guess is one
-    /// persisted `i` keypress away from correct.
+    /// Pick the startup theme: env override → persisted choice → Material.
+    /// `i` still toggles to emoji if the Nerd Font is missing.
     pub fn resolve(env: Option<&str>, persisted: Option<Self>) -> Self {
-        Self::from_env(env)
-            .or(persisted)
-            .unwrap_or_else(|| {
-                if nerd_font_installed() { Self::Material } else { Self::Emoji }
-            })
+        Self::from_env(env).or(persisted).unwrap_or(Self::Material)
     }
 
     pub fn from_state_name(name: &str) -> Option<Self> {
@@ -411,12 +399,13 @@ mod tests {
         assert_eq!(IconTheme::from_env(None), None);
         assert_eq!(IconTheme::from_env(Some("material")), Some(IconTheme::Material));
         assert_eq!(IconTheme::from_env(Some(" EMOJI ")), Some(IconTheme::Emoji));
-        // Env beats persisted; persisted beats the font probe.
+        // Env beats persisted; persisted beats the Material default.
         assert_eq!(
             IconTheme::resolve(Some("emoji"), Some(IconTheme::Material)),
             IconTheme::Emoji
         );
         assert_eq!(IconTheme::resolve(None, Some(IconTheme::Emoji)), IconTheme::Emoji);
+        assert_eq!(IconTheme::resolve(None, None), IconTheme::Material);
         assert_eq!(IconTheme::Emoji.toggled(), IconTheme::Material);
         assert_eq!(IconTheme::Material.toggled(), IconTheme::Emoji);
     }
