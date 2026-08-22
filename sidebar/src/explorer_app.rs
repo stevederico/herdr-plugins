@@ -194,6 +194,8 @@ pub struct App {
     /// A native folder picker running on a background thread; its result
     /// arrives here (None = cancelled).
     picking: Option<std::sync::mpsc::Receiver<Option<PathBuf>>>,
+    /// Last left-click on a folder row, for double-click → re-root.
+    last_dir_click: Option<(std::time::Instant, PathBuf)>,
 }
 
 
@@ -253,6 +255,7 @@ impl App {
             mouse_pos: None,
             last_beat: std::time::Instant::now(),
             picking: None,
+            last_dir_click: None,
         };
         app.apply_identity();
         app
@@ -507,11 +510,21 @@ impl App {
                 self.select(index);
                 let row = &self.rows[index];
                 let (is_dir, path) = (row.is_dir, row.path.clone());
-                // Single click selects + opens: folders expand/collapse, files preview.
-                // (Upstream required double-click on the folder name.)
+                // Single click: folders expand/collapse, files preview.
+                // Double-click a folder: make it the explorer root (Finder-style).
                 if is_dir {
-                    self.toggle();
+                    let now = std::time::Instant::now();
+                    let is_double = self.last_dir_click.as_ref().is_some_and(|(t, p)| {
+                        *p == path && now.duration_since(*t) < std::time::Duration::from_millis(400)
+                    });
+                    self.last_dir_click = Some((now, path.clone()));
+                    if is_double {
+                        self.change_folder(&path.display().to_string());
+                    } else {
+                        self.toggle();
+                    }
                 } else {
+                    self.last_dir_click = None;
                     self.open_preview(&path);
                 }
             }
