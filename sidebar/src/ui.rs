@@ -5,7 +5,7 @@
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Scrollbar, ScrollbarOrientation, ScrollbarState};
 
@@ -191,7 +191,12 @@ pub fn title_action_spans(
         let chip = title_action_chip(theme, action);
         let w = Span::raw(chip.as_str()).width() as u16;
         let rect = Rect::new(cx, y, w, 1);
-        let style = if hover.is_some_and(|(hx, hy)| hits(rect, hx, hy)) {
+        let hovered = hover.is_some_and(|(hx, hy)| hits(rect, hx, hy));
+        // GoUp is navigation, not a utility chip — dim made the arrow vanish.
+        let style = if action == TitleAction::GoUp {
+            let s = Style::default().fg(Color::LightBlue).add_modifier(Modifier::BOLD);
+            if hovered { s.bg(KEYCAP_BG) } else { s }
+        } else if hovered {
             Style::default().bg(KEYCAP_BG)
         } else {
             Style::default().dim()
