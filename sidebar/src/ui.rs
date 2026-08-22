@@ -143,7 +143,7 @@ pub fn title_actions_visible(last_mouse: Option<std::time::Instant>) -> bool {
 /// otherwise.
 pub fn title_action_icon(theme: IconTheme, action: TitleAction) -> &'static str {
     match (theme, action) {
-        (IconTheme::Material, TitleAction::GoUp) => "\u{ea60}", //  cod-arrow_up
+        (IconTheme::Material, TitleAction::GoUp) => "\u{eaa1}", //  cod-arrow_up
         (IconTheme::Material, TitleAction::NewFile) => "\u{ea7f}", //  cod-new_file
         (IconTheme::Material, TitleAction::NewFolder) => "\u{ea80}", //  cod-new_folder
         (IconTheme::Material, TitleAction::Refresh) => "\u{eb37}", //  cod-refresh
@@ -415,6 +415,12 @@ mod tests {
         assert!(cut.ends_with('…'));
         assert!(Span::raw(cut.as_str()).width() <= 8);
         assert_eq!(truncate_to("abc".into(), 1), "");
+    }
+
+    #[test]
+    fn go_up_uses_cod_arrow_up_not_cod_add() {
+        assert_eq!(title_action_icon(IconTheme::Material, TitleAction::GoUp), "\u{eaa1}");
+        assert_ne!(title_action_icon(IconTheme::Material, TitleAction::GoUp), "\u{ea60}");
     }
 
     #[test]
