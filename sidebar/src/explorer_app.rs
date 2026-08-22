@@ -450,6 +450,7 @@ impl App {
             KeyCode::Char('i') => self.set_theme(self.theme.toggled()),
             KeyCode::Char('b') => self.hide(),
             KeyCode::Char('c') => self.change_folder_dialog(),
+            KeyCode::Backspace | KeyCode::Char('u') => self.go_up(),
             KeyCode::Char('s') => self.open_settings(),
             KeyCode::Char('1') => return self.switch_to(View::Explorer),
             KeyCode::Char('2') => return self.switch_to(View::SourceControl),
@@ -540,6 +541,7 @@ impl App {
     /// One of the hover title-bar buttons was clicked.
     fn title_action(&mut self, action: TitleAction) {
         match action {
+            TitleAction::GoUp => self.go_up(),
             TitleAction::NewFile => self.open_create_prompt(false),
             TitleAction::NewFolder => self.open_create_prompt(true),
             TitleAction::Refresh => self.refresh_tree(),
@@ -990,6 +992,20 @@ impl App {
         });
     }
 
+    /// Parent of the current explorer root (Finder Back / `cd ..`).
+    fn go_up(&mut self) {
+        let root = self.tree.root_path();
+        let Some(parent) = root.parent() else {
+            self.notice = Some("already at root".into());
+            return;
+        };
+        if parent.as_os_str().is_empty() {
+            self.notice = Some("already at root".into());
+            return;
+        }
+        self.change_folder(&parent.display().to_string());
+    }
+
     /// Re-root everything at `target` (also the PROCESS cwd, so the Source
     /// Control view follows on the next view switch).
     fn change_folder(&mut self, raw: &str) {
@@ -1318,6 +1334,7 @@ impl App {
         self.title_zones.clear();
         let (action_spans, actions_w) = if title_actions_visible(self.last_mouse) {
             let actions = [
+                TitleAction::GoUp,
                 TitleAction::NewFile,
                 TitleAction::NewFolder,
                 TitleAction::Refresh,
@@ -1379,6 +1396,7 @@ impl App {
             ("r", "refresh"),
             (".", "dotfiles"),
             ("c", "folder"),
+            ("u", "up"),
             ("s", "settings"),
             ("b", "hide"),
             ("q", "quit"),

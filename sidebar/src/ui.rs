@@ -120,6 +120,7 @@ pub fn branch_icon(theme: IconTheme) -> &'static str {
 /// of a panel's title bar).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum TitleAction {
+    GoUp,
     NewFile,
     NewFolder,
     Refresh,
@@ -142,10 +143,12 @@ pub fn title_actions_visible(last_mouse: Option<std::time::Instant>) -> bool {
 /// otherwise.
 pub fn title_action_icon(theme: IconTheme, action: TitleAction) -> &'static str {
     match (theme, action) {
+        (IconTheme::Material, TitleAction::GoUp) => "\u{ea60}", //  cod-arrow_up
         (IconTheme::Material, TitleAction::NewFile) => "\u{ea7f}", //  cod-new_file
         (IconTheme::Material, TitleAction::NewFolder) => "\u{ea80}", //  cod-new_folder
         (IconTheme::Material, TitleAction::Refresh) => "\u{eb37}", //  cod-refresh
         (IconTheme::Material, TitleAction::CollapseAll) => "\u{eac5}", //  cod-collapse_all
+        (IconTheme::Emoji, TitleAction::GoUp) => "↑",
         (IconTheme::Emoji, TitleAction::NewFile) => "📄",
         (IconTheme::Emoji, TitleAction::NewFolder) => "📁",
         (IconTheme::Emoji, TitleAction::Refresh) => "⟳",
