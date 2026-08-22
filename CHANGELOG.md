@@ -1,3 +1,7 @@
+0.7.0
+
+  Hide sidebar title
+
 0.6.0
 
   Anchor settings popover

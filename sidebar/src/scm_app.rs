@@ -443,13 +443,13 @@ impl PaneCtl {
         Some(Self { pane_id })
     }
 
-    /// Set or clear the pane label — cleared while collapsed so the sliver
-    /// has no border title.
+    /// Set or clear the pane label. `None` sends JSON null (`--clear`).
     fn set_label(&self, label: Option<&str>) {
         let mut params = serde_json::json!({ "pane_id": self.pane_id });
-        if let Some(label) = label {
-            params["label"] = serde_json::Value::String(label.to_string());
-        }
+        params["label"] = match label {
+            Some(label) => serde_json::Value::String(label.to_string()),
+            None => serde_json::Value::Null,
+        };
         let _ = herdr_sidebar::ipc::call_text("pane.rename", params);
     }
 
@@ -619,11 +619,11 @@ impl App {
         self.sidebar_state.merged && self.other_exe.is_some()
     }
 
-    /// Push our label + metadata tokens to herdr for the current mode.
+    /// Push identity tokens. No border title — the header already names
+    /// the view, and the token identifies the pane.
     fn apply_identity(&self) {
         let Some(ctl) = &self.pane_ctl else { return };
-        let label = if self.merged() { sidebar::SIDEBAR_LABEL } else { MY_VIEW.label() };
-        ctl.set_label(Some(label));
+        ctl.set_label(None);
         ctl.report_tokens(MY_VIEW, self.merged());
     }
 

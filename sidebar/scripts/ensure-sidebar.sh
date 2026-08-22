@@ -61,7 +61,7 @@ np="$(printf '%s' "$out" | sed -n 's/.*"pane_id":"\([^"]*\)".*/\1/p' | head -n1)
 
 "$herdr_bin" pane swap --source-pane "$np" --target-pane "$target" >/dev/null 2>&1 || true
 "$herdr_bin" pane run "$np" "exec \"$bin\""
-"$herdr_bin" pane rename "$np" Explorer >/dev/null 2>&1 || true
+"$herdr_bin" pane rename "$np" --clear >/dev/null 2>&1 || true
 
 # Hand focus back if the swap left it on the explorer (focus follows the slot).
 if [ "$target" = "$fid" ]; then

@@ -128,7 +128,7 @@ fn open(panes_json: &str, focus_new: bool) -> std::io::Result<()> {
     }
     ipc::call_text(
         "pane.rename",
-        serde_json::json!({ "pane_id": new_pane, "label": launch::PANE_LABEL }),
+        serde_json::json!({ "pane_id": new_pane, "label": serde_json::Value::Null }),
     )?;
     full_height_repair(&new_pane);
 
