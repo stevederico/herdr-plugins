@@ -952,34 +952,13 @@ impl App {
                 let path = target.map(|(p, _)| p).unwrap_or_else(|| self.tree.root_path());
                 actions::reveal(&path);
             }
-            MenuAction::ChangeFolder => self.change_folder_dialog(),
+            MenuAction::ChangeFolder => self.change_folder_prompt(),
             MenuAction::ChangeFolderTyped => self.change_folder_prompt(),
         }
     }
 
-    /// `c` / the context menu: the NATIVE folder picker, on a background
-    /// thread so the pane's liveness heartbeat keeps beating while the
-    /// dialog is open (a frozen TUI would read as a corpse after 20s).
-    #[cfg(any(windows, target_os = "macos"))]
-    fn change_folder_dialog(&mut self) {
-        if self.picking.is_some() {
-            return;
-        }
-        let (tx, rx) = std::sync::mpsc::channel();
-        let start = self.tree.root_path();
-        std::thread::spawn(move || {
-            let picked = rfd::FileDialog::new()
-                .set_title("Open Folder")
-                .set_directory(&start)
-                .pick_folder();
-            let _ = tx.send(picked);
-        });
-        self.picking = Some(rx);
-        self.notice = Some("folder picker open… (check your other windows)".into());
-    }
-
-    /// No native dialogs here — fall back to the typed prompt.
-    #[cfg(not(any(windows, target_os = "macos")))]
+    /// Native `rfd` dialogs panic in a TUI/SSH (no windowed main thread).
+    /// Always use the typed path prompt.
     fn change_folder_dialog(&mut self) {
         self.change_folder_prompt();
     }

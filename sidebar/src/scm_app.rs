@@ -1514,29 +1514,9 @@ impl App {
         }
     }
 
-    /// The NATIVE folder picker on a background thread (the pane's liveness
-    /// heartbeat must keep beating while the dialog is open).
-    #[cfg(any(windows, target_os = "macos"))]
+    /// Native `rfd` dialogs panic in a TUI/SSH. Change folder from Files (`c`).
     fn change_folder_dialog(&mut self) {
-        if self.picking.is_some() {
-            return;
-        }
-        let (tx, rx) = std::sync::mpsc::channel();
-        let start = self.cwd.clone();
-        std::thread::spawn(move || {
-            let picked = rfd::FileDialog::new()
-                .set_title("Open Folder")
-                .set_directory(&start)
-                .pick_folder();
-            let _ = tx.send(picked);
-        });
-        self.picking = Some(rx);
-        self.flash = Some(("folder picker open… (check your other windows)".into(), false));
-    }
-
-    #[cfg(not(any(windows, target_os = "macos")))]
-    fn change_folder_dialog(&mut self) {
-        self.flash = Some(("no native picker here — use c in the Files view".into(), true));
+        self.flash = Some(("change folder in Files (c)".into(), true));
     }
 
     /// Collect a finished folder pick, if any (called from the tick loop).
