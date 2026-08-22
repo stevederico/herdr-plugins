@@ -36,12 +36,12 @@ title = "Sidebar"
 placement = "split"
 command = ["./target/release/herdr-sidebar"]
 
-# New Grok workspace rooted at ~/Desktop/projects.
+# New Grok in the current workspace (split; does not create a space).
 [[actions]]
 id = "new-agent"
 platforms = ["linux", "macos"]
-title = "New Grok In Projects"
-description = "Create a workspace in ~/Desktop/projects and start Grok."
+title = "New Grok In Workspace"
+description = "Split a pane in the current workspace and start Grok."
 command = ["bash", "scripts/new-agent.sh"]
 
 # Toggle the sidebar: open left-docked / focus if unfocused / close if focused.

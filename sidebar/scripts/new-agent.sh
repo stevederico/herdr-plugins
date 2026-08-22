@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# New Grok session in ~/Desktop/projects (new workspace + agent).
+# New Grok in the current workspace (split, do not create a space).
 set -euo pipefail
 herdr="${HERDR_BIN_PATH:-herdr}"
-root="${HERDR_NEW_AGENT_CWD:-$HOME/Desktop/projects}"
+fallback="${HERDR_NEW_AGENT_CWD:-$HOME/Desktop/projects}"
 kind="${HERDR_NEW_AGENT_KIND:-grok}"
 
-python3 - "$herdr" "$root" "$kind" <<'PY'
-import json, os, subprocess, sys
+python3 - "$herdr" "$fallback" "$kind" <<'PY'
+import json, subprocess, sys
 
-herdr, root, kind = sys.argv[1], sys.argv[2], sys.argv[3]
+herdr, fallback, kind = sys.argv[1], sys.argv[2], sys.argv[3]
 
 def jcmd(*args):
     out = subprocess.check_output([herdr, *args], text=True, stderr=subprocess.DEVNULL)
@@ -33,24 +33,42 @@ def walk_pane_id(obj):
                 return found
     return None
 
+def is_chrome(p):
+    label = p.get("label") or ""
+    tokens = p.get("tokens") or {}
+    blob = " ".join(tokens.keys())
+    return label in ("Sidebar", "Explorer", "Preview", "Source Control") or "herdr-sidebar" in blob
+
 def live_names():
     data = jcmd("agent", "list")
-    names = set()
     blob = data.get("result", data)
-    agents = blob.get("agents") if isinstance(blob, dict) else None
-    if not isinstance(agents, list):
-        return names
-    for a in agents:
+    agents = blob.get("agents") if isinstance(blob, dict) else []
+    names = set()
+    for a in agents or []:
         if isinstance(a, dict):
             n = a.get("name") or a.get("agent")
             if isinstance(n, str):
                 names.add(n)
     return names
 
-created = jcmd("workspace", "create", "--cwd", root, "--label", kind, "--focus")
+panes = (jcmd("pane", "list").get("result") or {}).get("panes") or []
+focused = next((p for p in panes if p.get("focused")), None)
+if not focused:
+    raise SystemExit("no focused pane")
+tab = focused.get("tab_id")
+cwd = focused.get("cwd") or fallback
+target = focused
+if is_chrome(target):
+    others = [p for p in panes if p.get("tab_id") == tab and not is_chrome(p)]
+    if others:
+        target = others[0]
+tid = target.get("pane_id")
+if not tid:
+    raise SystemExit("no split target")
+created = jcmd("pane", "split", tid, "--direction", "down", "--cwd", cwd, "--focus")
 pane = walk_pane_id(created)
 if not pane:
-    raise SystemExit("workspace create did not return a pane id")
+    raise SystemExit("pane split did not return a pane id")
 
 taken = live_names()
 name = kind
@@ -60,5 +78,5 @@ while name in taken:
     n += 1
 
 jcmd("agent", "start", name, "--kind", kind, "--pane", pane)
-print(json.dumps({"pane_id": pane, "agent": name, "cwd": root}))
+print(json.dumps({"pane_id": pane, "agent": name, "cwd": cwd}))
 PY
