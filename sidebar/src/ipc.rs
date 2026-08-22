@@ -27,7 +27,8 @@ pub fn socket_path() -> Option<PathBuf> {
     }
     #[cfg(not(windows))]
     {
-        None
+        std::env::var_os("HOME")
+            .map(|home| PathBuf::from(home).join(".config/herdr/herdr.sock"))
     }
 }
 

@@ -371,9 +371,64 @@ impl Doc {
 
 fn load(request: &Request) -> Doc {
     match request {
-        Request::File(path) => load_file(path),
-        Request::Diff { root, rel, kind } => load_diff(root, rel, kind),
-        Request::Show { root, spec, path } => load_show(root, spec, path.as_deref()),
+        Request::File(path) if crate::media::is_media(path) => load_media(path),
+        Request::File(path) => {
+            crate::media::clear();
+            load_file(path)
+        }
+        Request::Diff { root, rel, kind } => {
+            crate::media::clear();
+            load_diff(root, rel, kind)
+        }
+        Request::Show { root, spec, path } => {
+            crate::media::clear();
+            load_show(root, spec, path.as_deref())
+        }
+    }
+}
+
+fn load_media(target: &Path) -> Doc {
+    let name = target
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| target.display().to_string());
+    let kind = if crate::media::is_video(target) { "video" } else { "image" };
+    let (lines, notice) = match crate::media::rasterize(target) {
+        Ok((png, w, h)) => {
+            let gfx = crate::media::show(&png, w, h);
+            let mut lines = vec![
+                Line::raw(format!("{kind}  {w}×{h}")),
+                Line::raw(target.display().to_string()),
+            ];
+            let notice = match gfx {
+                Ok(()) => "o opens in Preview".into(),
+                Err(_) => {
+                    lines.push(Line::raw("(in-pane graphics off — press o)"));
+                    "o opens in Preview".into()
+                }
+            };
+            (lines, notice)
+        }
+        Err(e) => (
+            vec![
+                Line::raw(format!("({e})")),
+                Line::raw("press o to open in Preview"),
+            ],
+            String::new(),
+        ),
+    };
+    Doc {
+        name,
+        context: target.display().to_string(),
+        lines,
+        buffer: None,
+        path: Some(target.to_path_buf()),
+        cursor_row: 0,
+        cursor_col: 0,
+        dirty: false,
+        notice,
+        numbered: false,
+        scroll: 0,
     }
 }
 
@@ -581,6 +636,7 @@ fn report_identity(doc_name: &str) {
 /// name, so a full-screen (zoomed) preview drops the user exactly where
 /// they were.
 fn close_own_pane(control: &Path) {
+    crate::media::clear();
     if let Some(owner) = owner_pane_id(control) {
         restore_parked(&owner);
         let _ = ipc::call_text("pane.focus", serde_json::json!({ "pane_id": owner }));
@@ -651,6 +707,11 @@ pub fn run(control: &Path) -> std::io::Result<()> {
                         KeyCode::Char('q') if !doc.editable() => {
                             close_own_pane(control);
                             break Ok(());
+                        }
+                        KeyCode::Char('o') if !doc.editable() => {
+                            if let Some(path) = &doc.path {
+                                crate::media::open_external(path);
+                            }
                         }
                         KeyCode::Up => {
                             if doc.editable() {
@@ -918,7 +979,11 @@ fn draw_doc(frame: &mut Frame, doc: &mut Doc, theme: IconTheme) -> usize {
         };
         format!(" type to edit  ^s save  esc close  · {status}")
     } else {
-        " ↑↓ scroll  ⇞⇟ page  g G ends  q close".into()
+        if doc.path.as_deref().is_some_and(crate::media::is_media) {
+            " o open in Preview  esc close".into()
+        } else {
+            " ↑↓ scroll  ⇞⇟ page  g G ends  q close".into()
+        }
     };
     frame.render_widget(Paragraph::new(Line::from(hint.dim())), footer);
     usize::from(body.height).saturating_sub(1).max(1)
