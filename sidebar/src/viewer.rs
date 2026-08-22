@@ -18,7 +18,7 @@ use crossterm::event::{
     MouseButton, MouseEventKind,
 };
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Layout};
+use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
@@ -409,8 +409,8 @@ fn load_media(target: &Path) -> Doc {
         scroll: 0,
         media: Some(crate::media::MediaState {
             path: target.to_path_buf(),
-            png: None,
-            painted: None,
+            image: None,
+            fit: (0, 0),
         }),
     }
 }
@@ -670,15 +670,9 @@ pub fn run(control: &Path) -> std::io::Result<()> {
     let mut page: usize = 20;
     let mut beat: u64 = 0;
     let result = loop {
-        if doc.media.is_some() {
-            if let Some(media) = doc.media.as_mut() {
-                let _ = crate::media::paint(media, &doc.name);
-            }
-        } else {
-            let draw = terminal.draw(|frame| page = draw_doc(frame, &mut doc, theme));
-            if let Err(e) = draw {
-                break Err(e);
-            }
+        let draw = terminal.draw(|frame| page = draw_doc(frame, &mut doc, theme));
+        if let Err(e) = draw {
+            break Err(e);
         }
         let max = doc.line_count().saturating_sub(1);
         if event::poll(POLL)? {
@@ -815,7 +809,7 @@ pub fn run(control: &Path) -> std::io::Result<()> {
                 },
                 Event::Resize(_, _) => {
                     if let Some(media) = doc.media.as_mut() {
-                        media.painted = None;
+                        media.fit = (0, 0);
                     }
                 }
                 _ => {}
@@ -899,6 +893,35 @@ fn draw_doc(frame: &mut Frame, doc: &mut Doc, theme: IconTheme) -> usize {
     let mut spans = left;
     spans.push(Span::styled(format!("  {shown}"), Style::default().dim()));
     frame.render_widget(Paragraph::new(Line::from(spans)), header);
+
+    if let Some(media) = doc.media.as_mut() {
+        let fit = (body.width, body.height);
+        if media.fit != fit && fit.0 >= 2 && fit.1 >= 1 {
+            match crate::media::rasterize_cells(&media.path, fit.0, fit.1) {
+                Ok(img) => {
+                    media.image = Some(img);
+                    doc.notice.clear();
+                }
+                Err(e) => {
+                    doc.lines = vec![
+                        Line::raw(format!("({e})")),
+                        Line::raw("press o to open the real file"),
+                    ];
+                    media.image = None;
+                    doc.notice = e;
+                }
+            }
+            media.fit = fit;
+        }
+        if let Some(img) = &media.image {
+            draw_cell_image(frame, body, img);
+            frame.render_widget(
+                Paragraph::new(Line::from(" o open real png  esc close".dim())),
+                footer,
+            );
+            return usize::from(body.height).max(1);
+        }
+    }
 
     let number_width = total.to_string().len();
     let text: Vec<Line> = if let Some(buf) = &doc.buffer {
@@ -986,6 +1009,27 @@ fn draw_doc(frame: &mut Frame, doc: &mut Doc, theme: IconTheme) -> usize {
     };
     frame.render_widget(Paragraph::new(Line::from(hint.dim())), footer);
     usize::from(body.height).saturating_sub(1).max(1)
+}
+
+fn draw_cell_image(frame: &mut Frame, area: Rect, img: &crate::media::CellImage) {
+    let rows = usize::from(img.rows.min(area.height));
+    let cols = usize::from(img.cols.min(area.width));
+    let mut lines = Vec::with_capacity(rows);
+    for y in 0..rows {
+        let mut spans = Vec::with_capacity(cols);
+        for x in 0..cols {
+            let i = y * usize::from(img.cols) + x;
+            let (ur, ug, ub, lr, lg, lb) = img.cells[i];
+            spans.push(Span::styled(
+                "▀",
+                Style::default()
+                    .fg(Color::Rgb(ur, ug, ub))
+                    .bg(Color::Rgb(lr, lg, lb)),
+            ));
+        }
+        lines.push(Line::from(spans));
+    }
+    frame.render_widget(Paragraph::new(lines), area);
 }
 
 // ---------------------------------------------------------------------------
