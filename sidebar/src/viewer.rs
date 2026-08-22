@@ -929,8 +929,7 @@ fn draw_doc(frame: &mut Frame, doc: &mut Doc, theme: IconTheme) -> usize {
 // ---------------------------------------------------------------------------
 
 /// Write `payload` to the caller's control file and make sure a live viewer
-/// pane exists beside it (spawning one to our right when needed). Errors are
-/// human-readable notices.
+/// pane exists on the far right of the tab. Errors are human-readable notices.
 pub fn open_in_pane(my_pane_id: &str, spawn_cwd: &Path, payload: &str) -> Result<(), String> {
     let control = control_path(my_pane_id);
     std::fs::write(&control, payload).map_err(|e| format!("preview failed: {e}"))?;
@@ -1081,14 +1080,17 @@ fn spawn_command_pane(
     focus_new: bool,
 ) -> Result<(), String> {
     let layout = ipc::call_text("pane.layout", serde_json::json!({ "pane_id": my_pane_id })).ok();
-    let neighbor = layout.as_deref().and_then(|json| right_neighbor(json, my_pane_id));
-    // Splitting ourselves (no neighbor — e.g. everything else just parked,
+    // Far-right preview: explorer | grok | preview. Split the rightmost
+    // pane (not our immediate neighbor — that sandwiched preview between
+    // the tree and the agent).
+    let rightmost = layout.as_deref().and_then(|json| rightmost_pane(json, my_pane_id));
+    // Splitting ourselves (no other panes — e.g. everything else just parked,
     // leaving us momentarily full-width): keep the width the sidebar had
     // BEFORE the park, not a ballooned 30-50%.
     let own_frac = pre_park_frac.unwrap_or(0.3);
-    let (target, ratio, needs_swap) = match &neighbor {
-        Some(id) => (id.clone(), 0.5, true),
-        None => (my_pane_id.to_string(), own_frac, false),
+    let (target, ratio) = match &rightmost {
+        Some(id) => (id.clone(), 0.5),
+        None => (my_pane_id.to_string(), own_frac),
     };
     let response = ipc::call_text(
         "pane.split",
@@ -1105,12 +1107,6 @@ fn spawn_command_pane(
         .ok()
         .and_then(|r| crate::launch::split_pane_id(&r))
         .ok_or_else(|| "preview pane failed to open".to_string())?;
-    if needs_swap {
-        let _ = ipc::call_text(
-            "pane.swap",
-            serde_json::json!({ "source_pane_id": new_pane, "target_pane_id": target }),
-        );
-    }
     let _ = ipc::call_text(
         "pane.send_input",
         serde_json::json!({ "pane_id": new_pane, "text": command, "keys": ["Enter"] }),
@@ -1137,9 +1133,8 @@ fn spawn_command_pane(
     Ok(())
 }
 
-/// Split a viewer pane directly to the caller's right: split the right
-/// NEIGHBOR and swap the fresh pane into its left slot (split only goes
-/// right/down), so the layout reads sidebar | preview | rest.
+/// Split a viewer pane on the far right of the tab so the layout reads
+/// explorer | rest | preview (not explorer | preview | rest).
 fn spawn_viewer_pane(
     my_pane_id: &str,
     spawn_cwd: &Path,
@@ -1464,9 +1459,9 @@ fn move_into(tab: &str, pane: &str, target: &str, split: &str, ratio: f64) {
     );
 }
 
-/// The pane directly to the right of `pane_id` (sharing vertical overlap),
-/// from a `pane.layout` response.
-fn right_neighbor(layout_json: &str, pane_id: &str) -> Option<String> {
+/// The rightmost pane in this layout, not `except`. Used to dock preview
+/// on the far right (explorer | grok | preview).
+fn rightmost_pane(layout_json: &str, except: &str) -> Option<String> {
     #[derive(serde::Deserialize)]
     struct Msg {
         result: Res,
@@ -1493,18 +1488,13 @@ fn right_neighbor(layout_json: &str, pane_id: &str) -> Option<String> {
         height: i64,
     }
     let msg: Msg = serde_json::from_str(layout_json.trim_start_matches('\u{feff}')).ok()?;
-    let panes = &msg.result.layout.panes;
-    let me = panes
+    msg.result
+        .layout
+        .panes
         .iter()
-        .find(|p| p.pane_id.as_deref() == Some(pane_id))?
-        .rect
-        .as_ref()?;
-    let (my_right, my_top, my_bottom) = (me.x + me.width, me.y, me.y + me.height);
-    panes
-        .iter()
-        .filter(|p| p.pane_id.as_deref() != Some(pane_id))
+        .filter(|p| p.pane_id.as_deref() != Some(except))
         .filter_map(|p| Some((p.pane_id.clone()?, p.rect.as_ref()?)))
-        .find(|(_, r)| r.x == my_right && r.y < my_bottom && r.y + r.height > my_top)
+        .max_by_key(|(_, r)| (r.x + r.width, r.height, -r.y))
         .map(|(id, _)| id)
 }
 
@@ -1570,5 +1560,17 @@ mod tests {
             now - 999
         );
         assert_eq!(viewer_pane_in_tab(&stale, "w1:p1"), Some(("w1:p2".into(), true)));
+    }
+
+    #[test]
+    fn rightmost_pane_skips_explorer_and_picks_far_edge() {
+        let json = r#"{"result":{"layout":{"panes":[
+            {"pane_id":"w1:p1","rect":{"x":0,"y":0,"width":20,"height":40}},
+            {"pane_id":"w1:p2","rect":{"x":20,"y":0,"width":50,"height":40}},
+            {"pane_id":"w1:p3","rect":{"x":70,"y":0,"width":30,"height":40}}
+        ]}}}"#;
+        assert_eq!(rightmost_pane(json, "w1:p1").as_deref(), Some("w1:p3"));
+        assert_eq!(rightmost_pane(json, "w1:p3").as_deref(), Some("w1:p2"));
+        assert_eq!(rightmost_pane(r#"{"result":{"layout":{"panes":[]}}}"#, "w1:p1"), None);
     }
 }
