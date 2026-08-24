@@ -572,6 +572,23 @@ mod tests {
     }
 
     #[test]
+    fn unlabeled_boot_pane_is_invisible_until_token() {
+        // `pane rename --clear` (hide title) + TUI not yet reporting =
+        // launch_decision OPEN. The unix ensure hook must hold its lock
+        // until pane_has_token, or prefix+n docks a second explorer.
+        let booting = pane_list(&format!(
+            r#"{FOCUSED},{{"pane_id":"w1:p2","tab_id":"w1:t1"}}"#
+        ));
+        assert_eq!(launch_decision(&booting, 100), "OPEN");
+        assert!(!pane_has_token(&booting, "w1:p2"));
+        let live = pane_list(&format!(
+            r#"{FOCUSED},{{"pane_id":"w1:p2","tab_id":"w1:t1","tokens":{{"herdr-sidebar-explorer":95}}}}"#
+        ));
+        assert!(pane_has_token(&live, "w1:p2"));
+        assert!(!pane_has_token(&live, "w1:p9"));
+    }
+
+    #[test]
     fn decision_replaces_dead_panes() {
         // Stale heartbeat (or a pre-heartbeat token shape) = a dead TUI whose
         // pane must be closed and re-docked, never focused.

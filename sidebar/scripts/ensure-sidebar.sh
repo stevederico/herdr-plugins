@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
-# ensure-explorer.sh — unix [[events]] hook body: make sure the FOCUSED tab has
-# an Explorer pane docked on the left, WITHOUT stealing the user's focus.
+# ensure-sidebar.sh — unix [[events]] hook body: make sure the FOCUSED tab has
+# a Sidebar pane docked on the left, WITHOUT stealing the user's focus.
 #
-# Runs on tab.focused / workspace.focused, so it must be idempotent and quiet:
-# already present → exit; else open unfocused (see ensure-explorer.ps1 for the
-# focus-follows-the-slot rationale behind the final `pane focus`).
+# Runs on tab.focused / workspace.focused / workspace.created, so it must be
+# idempotent and quiet: already present → exit; else open unfocused. After a
+# spawn, hold the lock until the TUI stamps its token — prefix+n fires several
+# of these events in sequence, and a released lock before the token is ready
+# docks a second explorer (title is cleared, so launch_decision cannot see it).
 set -uo pipefail
 
 herdr_bin="${HERDR_BIN_PATH:-herdr}"
@@ -62,6 +64,17 @@ np="$(printf '%s' "$out" | sed -n 's/.*"pane_id":"\([^"]*\)".*/\1/p' | head -n1)
 "$herdr_bin" pane swap --source-pane "$np" --target-pane "$target" >/dev/null 2>&1 || true
 "$herdr_bin" pane run "$np" "exec \"$bin\""
 "$herdr_bin" pane rename "$np" --clear >/dev/null 2>&1 || true
+
+# Hold the lock until the TUI stamps its identity token (~1-2s). Title is
+# cleared (0.7.0) so launch_decision cannot see this pane until the token
+# exists; sequential workspace.created / tab.created / pane.focused hooks
+# from prefix+n would otherwise each OPEN and dock a second explorer.
+for _ in $(seq 1 30); do
+  list="$("$herdr_bin" pane list 2>/dev/null || true)"
+  has="$(printf '%s' "$list" | "$bin" --has-token "$np" 2>/dev/null || true)"
+  [ "$has" = "yes" ] && break
+  sleep 0.2
+done
 
 # Hand focus back if the swap left it on the explorer (focus follows the slot).
 if [ "$target" = "$fid" ]; then

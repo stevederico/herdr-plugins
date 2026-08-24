@@ -51,6 +51,15 @@ fn main() -> std::io::Result<()> {
             println!("{}", launch::agent_cwd(&read_stdin()?));
             return Ok(());
         }
+        Some("--has-token") => {
+            let Some(id) = std::env::args().nth(2) else {
+                eprintln!("herdr-sidebar: --has-token needs a pane id");
+                std::process::exit(2);
+            };
+            let yes = launch::pane_has_token(&read_stdin()?, &id);
+            println!("{}", if yes { "yes" } else { "no" });
+            return Ok(());
+        }
         Some("--preview") => {
             let Some(control) = std::env::args().nth(2) else {
                 eprintln!("herdr-sidebar: --preview needs a control-file path");
@@ -62,7 +71,7 @@ fn main() -> std::io::Result<()> {
         Some(other) => {
             eprintln!("herdr-sidebar: unknown argument `{other}`");
             eprintln!(
-                "usage: herdr-sidebar [--view explorer|git|--preview <ctl>|--launch-decision [git]|--focused-pane|--open-plan|--focused-tab|--agent-cwd]"
+                "usage: herdr-sidebar [--view explorer|git|--preview <ctl>|--launch-decision [git]|--focused-pane|--open-plan|--focused-tab|--agent-cwd|--has-token <pane_id>]"
             );
             std::process::exit(2);
         }

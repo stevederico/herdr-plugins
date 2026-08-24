@@ -1,3 +1,7 @@
+0.7.1
+
+  Fix duplicate explorer
+
 0.7.0
 
   Hide sidebar title
