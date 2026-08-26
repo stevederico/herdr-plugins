@@ -31,8 +31,8 @@ const MY_VIEW: View = View::Explorer;
 const DEFAULT_EXPANDED_WIDTH: u16 = 32;
 
 /// After the user re-roots (parent up-arrow, picker, double-click), wait this
-/// long without input before snapping the tree back to the agent cwd.
-const CWD_FOLLOW_HOLD: std::time::Duration = std::time::Duration::from_secs(300);
+/// long then snap the tree back to the agent cwd.
+const CWD_FOLLOW_HOLD: std::time::Duration = std::time::Duration::from_secs(180);
 
 /// Handle for resizing our own pane through the herdr socket API.
 struct PaneCtl {
@@ -201,7 +201,7 @@ pub struct App {
     picking: Option<std::sync::mpsc::Receiver<Option<PathBuf>>>,
     /// Last left-click on a row, for double-click (re-root / open media).
     last_click: Option<(std::time::Instant, PathBuf)>,
-    /// Last user input while the explorer is away from the agent cwd.
+    /// When the user last re-rooted away from the agent cwd.
     /// Heartbeat follow waits until this is older than [`CWD_FOLLOW_HOLD`].
     cwd_follow_hold: Option<std::time::Instant>,
 }
@@ -287,7 +287,7 @@ impl App {
 
     /// Root the tree at the agent pane's stable `cwd` (not live foreground
     /// cwd). Leave the user alone if they drilled into a subfolder, or if
-    /// they went up / re-rooted and are still navigating.
+    /// they re-rooted less than [`CWD_FOLLOW_HOLD`] ago.
     pub fn follow_agent_cwd(&mut self) {
         if self.overlay.is_some() {
             return;
@@ -321,13 +321,6 @@ impl App {
             return;
         }
         self.re_root(&cwd.display().to_string(), false);
-    }
-
-    /// Keep the parent-browse grace alive while the user is still acting.
-    fn touch_cwd_follow_hold(&mut self) {
-        if self.cwd_follow_hold.is_some() {
-            self.cwd_follow_hold = Some(std::time::Instant::now());
-        }
     }
 
     /// After the neighbor pane is closed, this pane eats the full tab.
@@ -496,7 +489,6 @@ impl App {
         if key.kind != KeyEventKind::Press && key.kind != KeyEventKind::Repeat {
             return None;
         }
-        self.touch_cwd_follow_hold();
         if key.kind == KeyEventKind::Press {
             self.notice = None;
         }
@@ -543,7 +535,6 @@ impl App {
         // hover title-bar buttons until the linger expires.
         self.last_mouse = Some(std::time::Instant::now());
         self.mouse_pos = Some((mouse.column, mouse.row));
-        self.touch_cwd_follow_hold();
         if self.overlay.is_some() {
             self.overlay_mouse(mouse);
             return None;
@@ -1835,7 +1826,7 @@ mod tests {
                 &parent,
                 &cwd,
                 Some(t0),
-                t0 + std::time::Duration::from_secs(299),
+                t0 + std::time::Duration::from_secs(179),
                 grace
             ),
             "still within the hold"
@@ -1845,7 +1836,7 @@ mod tests {
                 &parent,
                 &cwd,
                 Some(t0),
-                t0 + std::time::Duration::from_secs(300),
+                t0 + std::time::Duration::from_secs(180),
                 grace
             ),
             "hold expired"

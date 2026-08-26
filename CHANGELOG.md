@@ -1,3 +1,7 @@
+0.10.0
+
+  Snap after move
+
 0.9.0
 
   Forward remote copy
