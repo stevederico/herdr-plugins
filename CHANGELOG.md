@@ -1,3 +1,7 @@
+0.11.0
+
+  Copy preview text
+
 0.10.0
 
   Snap after move

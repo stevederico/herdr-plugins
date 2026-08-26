@@ -128,6 +128,10 @@ struct Doc {
     md_render: bool,
     /// Header chip columns for the Raw/Rendered toggle (exclusive end).
     md_toggle: Option<(u16, u16)>,
+    /// Inclusive display-line range to copy (unordered).
+    sel: Option<(usize, usize)>,
+    /// Mouse-drag anchor row, if a selection is in progress.
+    sel_anchor: Option<usize>,
 }
 
 impl Doc {
@@ -147,6 +151,8 @@ impl Doc {
             media: None,
             md_render: false,
             md_toggle: None,
+            sel: None,
+            sel_anchor: None,
         }
     }
 
@@ -406,6 +412,79 @@ impl Doc {
         self.dirty = true;
         self.save();
     }
+
+    fn select_all(&mut self) {
+        let n = self.plain_lines().len();
+        self.sel = (n > 0).then_some((0, n - 1));
+        self.sel_anchor = None;
+        self.notice = "all selected".into();
+    }
+
+    fn copy_selection(&mut self) {
+        let text = self.selected_text();
+        self.notice = match crate::actions::copy_to_clipboard(&text) {
+            Ok(()) => "copied".into(),
+            Err(e) => format!("copy failed: {e}"),
+        };
+    }
+
+    fn selected_text(&self) -> String {
+        selected_plain(&self.plain_lines(), self.sel)
+    }
+
+    fn plain_lines(&self) -> Vec<String> {
+        if self.md_render {
+            if let Some(buf) = &self.buffer {
+                return crate::md::render(&buf.join("\n")).iter().map(line_plain).collect();
+            }
+        }
+        if let Some(buf) = &self.buffer {
+            return buf.clone();
+        }
+        self.lines.iter().map(line_plain).collect()
+    }
+
+    fn line_selected(&self, n: usize) -> bool {
+        self.sel.is_some_and(|(a, b)| n >= a.min(b) && n <= a.max(b))
+    }
+
+    fn row_at_mouse(&self, mouse_row: u16) -> usize {
+        let row = self.scroll + usize::from(mouse_row.saturating_sub(1));
+        row.min(self.line_count().saturating_sub(1))
+    }
+
+    fn select_to_mouse(&mut self, mouse_row: u16, start: bool) {
+        let row = self.row_at_mouse(mouse_row);
+        if start {
+            self.sel_anchor = Some(row);
+            self.sel = Some((row, row));
+        } else if let Some(anchor) = self.sel_anchor {
+            self.sel = Some((anchor, row));
+        }
+    }
+}
+
+fn line_plain(line: &Line<'_>) -> String {
+    line.spans.iter().map(|s| s.content.as_ref()).collect()
+}
+
+fn selected_plain(lines: &[String], sel: Option<(usize, usize)>) -> String {
+    if lines.is_empty() {
+        return String::new();
+    }
+    let (lo, hi) = match sel {
+        Some((a, b)) => (a.min(b), a.max(b).min(lines.len() - 1)),
+        None => (0, lines.len() - 1),
+    };
+    lines[lo..=hi].join("\n")
+}
+
+fn with_sel_bg(line: Line<'static>, on: bool) -> Line<'static> {
+    if on {
+        line.patch_style(Style::default().bg(Color::DarkGray))
+    } else {
+        line
+    }
 }
 
 fn load(request: &Request) -> Doc {
@@ -451,6 +530,8 @@ fn load_media(target: &Path) -> Doc {
         }),
         md_render: false,
         md_toggle: None,
+        sel: None,
+        sel_anchor: None,
     }
 }
 
@@ -503,6 +584,8 @@ fn load_show(root: &Path, spec: &str, path: Option<&str>) -> Doc {
         media: None,
         md_render: false,
         md_toggle: None,
+        sel: None,
+        sel_anchor: None,
     }
 }
 
@@ -527,6 +610,8 @@ fn load_file(target: &Path) -> Doc {
             media: None,
             md_render: false,
             md_toggle: None,
+            sel: None,
+            sel_anchor: None,
         },
         Ok(bytes) => {
             let head = &bytes[..bytes.len().min(8192)];
@@ -546,6 +631,8 @@ fn load_file(target: &Path) -> Doc {
                     media: None,
                     md_render: false,
                     md_toggle: None,
+            sel: None,
+            sel_anchor: None,
                 };
             }
             let truncated = bytes.len() > MAX_BYTES;
@@ -574,6 +661,8 @@ fn load_file(target: &Path) -> Doc {
                 media: None,
                 md_render: crate::md::is_markdown(target),
                 md_toggle: None,
+            sel: None,
+            sel_anchor: None,
             }
         }
     }
@@ -638,6 +727,8 @@ fn load_diff(root: &Path, rel: &str, kind: &str) -> Doc {
         media: None,
         md_render: false,
         md_toggle: None,
+        sel: None,
+        sel_anchor: None,
     }
 }
 
@@ -728,11 +819,16 @@ pub fn run(control: &Path) -> std::io::Result<()> {
             match event::read()? {
                 Event::Key(key) if key.kind == KeyEventKind::Press => {
                     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+                    let cmd = key.modifiers.contains(KeyModifiers::SUPER)
+                        || key.modifiers.contains(KeyModifiers::META);
+                    let chord = ctrl || cmd;
                     match key.code {
                         KeyCode::Esc => {
                             close_own_pane(control);
                             break Ok(());
                         }
+                        KeyCode::Char('a') if chord => doc.select_all(),
+                        KeyCode::Char('c') if chord => doc.copy_selection(),
                         // Ctrl+S save (editable files).
                         KeyCode::Char('s') if ctrl && doc.editable() => doc.save(),
                         // Ctrl+W = word delete (when Option isn't passed through by the terminal).
@@ -753,7 +849,10 @@ pub fn run(control: &Path) -> std::io::Result<()> {
                         KeyCode::Char('m') if doc.is_markdown() => {
                             doc.md_render = !doc.md_render;
                             doc.scroll = 0;
+                            doc.sel = None;
+                            doc.sel_anchor = None;
                         }
+                        KeyCode::Char('y') if !doc.editable() => doc.copy_selection(),
                         KeyCode::Up => {
                             if doc.editable() {
                                 doc.move_up();
@@ -848,6 +947,8 @@ pub fn run(control: &Path) -> std::io::Result<()> {
                             if mouse.column >= a && mouse.column < b {
                                 doc.md_render = !doc.md_render;
                                 doc.scroll = 0;
+                                doc.sel = None;
+                                doc.sel_anchor = None;
                                 continue;
                             }
                         }
@@ -860,6 +961,7 @@ pub fn run(control: &Path) -> std::io::Result<()> {
                         let h = terminal.size()?.height;
                         if mouse.row + 1 < h {
                             let row = doc.scroll + usize::from(mouse.row.saturating_sub(1));
+                            doc.select_to_mouse(mouse.row, true);
                             doc.toggle_md_task(row);
                         }
                     }
@@ -873,6 +975,17 @@ pub fn run(control: &Path) -> std::io::Result<()> {
                             doc.cursor_col = col;
                             doc.clamp_cursor();
                         }
+                        doc.sel_anchor = Some(doc.row_at_mouse(mouse.row));
+                        doc.sel = None;
+                    }
+                    MouseEventKind::Down(MouseButton::Left) if mouse.row >= 1 => {
+                        doc.select_to_mouse(mouse.row, true);
+                    }
+                    MouseEventKind::Drag(MouseButton::Left) if mouse.row >= 1 => {
+                        doc.select_to_mouse(mouse.row, false);
+                    }
+                    MouseEventKind::Up(MouseButton::Left) => {
+                        doc.sel_anchor = None;
                     }
                     _ => {}
                 },
@@ -1018,8 +1131,10 @@ fn draw_doc(frame: &mut Frame, doc: &mut Doc, theme: IconTheme) -> usize {
         if let Some(buf) = &doc.buffer {
             crate::md::render(&buf.join("\n"))
                 .into_iter()
+                .enumerate()
                 .skip(doc.scroll)
                 .take(usize::from(body.height))
+                .map(|(n, line)| with_sel_bg(line, doc.line_selected(n)))
                 .collect()
         } else {
             Vec::new()
@@ -1033,7 +1148,7 @@ fn draw_doc(frame: &mut Frame, doc: &mut Doc, theme: IconTheme) -> usize {
                 let mut spans =
                     vec![Span::styled(format!("{:>number_width$} ", n + 1), Style::default().dim())];
                 spans.push(Span::raw(line.clone()));
-                Line::from(spans)
+                with_sel_bg(Line::from(spans), doc.line_selected(n))
             })
             .collect()
     } else {
@@ -1049,7 +1164,7 @@ fn draw_doc(frame: &mut Frame, doc: &mut Doc, theme: IconTheme) -> usize {
                         Style::default().dim(),
                     )];
                     spans.extend(line.spans.iter().cloned());
-                    Line::from(spans)
+                    with_sel_bg(Line::from(spans), doc.line_selected(n))
                 } else {
                     let mut line = line.clone();
                     // Tinted diff rows fill the full row, like an editor.
@@ -1059,7 +1174,7 @@ fn draw_doc(frame: &mut Frame, doc: &mut Doc, theme: IconTheme) -> usize {
                             line.spans.push(Span::raw(" ".repeat(pad)));
                         }
                     }
-                    line
+                    with_sel_bg(line, doc.line_selected(n))
                 }
             })
             .collect()
@@ -1099,9 +1214,14 @@ fn draw_doc(frame: &mut Frame, doc: &mut Doc, theme: IconTheme) -> usize {
         } else {
             doc.notice.as_str()
         };
-        format!(" type to edit  ^s save  esc close  · {status}")
+        format!(" type to edit  ^s save  ^a all  ^c copy  esc close  · {status}")
     } else if doc.md_render {
-        " click box  m raw  esc close".into()
+        let status = if doc.notice.is_empty() {
+            String::new()
+        } else {
+            format!("  · {}", doc.notice)
+        };
+        format!(" ^a select all  ^c copy  click box  m raw  esc close{status}")
     } else {
         if doc.path.as_deref().is_some_and(crate::media::is_media) {
             " o open in Preview  esc close".into()
@@ -1711,6 +1831,19 @@ fn rightmost_pane(layout_json: &str, except: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn selected_plain_copies_range_or_all() {
+        let lines = vec!["a".into(), "b".into(), "c".into()];
+        assert_eq!(selected_plain(&lines, None), "a\nb\nc");
+        assert_eq!(selected_plain(&lines, Some((1, 1))), "b");
+        assert_eq!(selected_plain(&lines, Some((2, 0))), "a\nb\nc");
+        assert_eq!(selected_plain(&[], None), "");
+        let rendered = crate::md::render("# Hi\n\nhello **there**");
+        let plain: Vec<String> = rendered.iter().map(line_plain).collect();
+        assert!(plain.iter().any(|l| l.contains("Hi")), "{plain:?}");
+        assert!(plain.iter().any(|l| l.contains("hello")), "{plain:?}");
+    }
 
     #[test]
     fn requests_roundtrip() {
