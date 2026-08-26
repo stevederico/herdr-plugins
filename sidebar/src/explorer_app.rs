@@ -30,6 +30,10 @@ const MY_VIEW: View = View::Explorer;
 /// Expanded width to restore when nothing better is known.
 const DEFAULT_EXPANDED_WIDTH: u16 = 32;
 
+/// After the user re-roots (parent up-arrow, picker, double-click), wait this
+/// long without input before snapping the tree back to the agent cwd.
+const CWD_FOLLOW_HOLD: std::time::Duration = std::time::Duration::from_secs(300);
+
 /// Handle for resizing our own pane through the herdr socket API.
 struct PaneCtl {
     pane_id: String,
@@ -197,6 +201,9 @@ pub struct App {
     picking: Option<std::sync::mpsc::Receiver<Option<PathBuf>>>,
     /// Last left-click on a row, for double-click (re-root / open media).
     last_click: Option<(std::time::Instant, PathBuf)>,
+    /// Last user input while the explorer is away from the agent cwd.
+    /// Heartbeat follow waits until this is older than [`CWD_FOLLOW_HOLD`].
+    cwd_follow_hold: Option<std::time::Instant>,
 }
 
 
@@ -257,6 +264,7 @@ impl App {
             last_beat: std::time::Instant::now(),
             picking: None,
             last_click: None,
+            cwd_follow_hold: None,
         };
         app.apply_identity();
         app
@@ -278,7 +286,8 @@ impl App {
     }
 
     /// Root the tree at the agent pane's stable `cwd` (not live foreground
-    /// cwd). Leave the user alone if they drilled into a subfolder.
+    /// cwd). Leave the user alone if they drilled into a subfolder, or if
+    /// they went up / re-rooted and are still navigating.
     pub fn follow_agent_cwd(&mut self) {
         if self.overlay.is_some() {
             return;
@@ -300,9 +309,25 @@ impl App {
         let cwd = cwd.canonicalize().unwrap_or(cwd);
         let root = self.tree.root_path();
         if root == cwd || root.starts_with(&cwd) {
+            self.cwd_follow_hold = None;
+        }
+        if !should_follow_cwd(
+            &root,
+            &cwd,
+            self.cwd_follow_hold,
+            std::time::Instant::now(),
+            CWD_FOLLOW_HOLD,
+        ) {
             return;
         }
-        self.change_folder(&cwd.display().to_string());
+        self.re_root(&cwd.display().to_string(), false);
+    }
+
+    /// Keep the parent-browse grace alive while the user is still acting.
+    fn touch_cwd_follow_hold(&mut self) {
+        if self.cwd_follow_hold.is_some() {
+            self.cwd_follow_hold = Some(std::time::Instant::now());
+        }
     }
 
     /// After the neighbor pane is closed, this pane eats the full tab.
@@ -471,6 +496,7 @@ impl App {
         if key.kind != KeyEventKind::Press && key.kind != KeyEventKind::Repeat {
             return None;
         }
+        self.touch_cwd_follow_hold();
         if key.kind == KeyEventKind::Press {
             self.notice = None;
         }
@@ -517,6 +543,7 @@ impl App {
         // hover title-bar buttons until the linger expires.
         self.last_mouse = Some(std::time::Instant::now());
         self.mouse_pos = Some((mouse.column, mouse.row));
+        self.touch_cwd_follow_hold();
         if self.overlay.is_some() {
             self.overlay_mouse(mouse);
             return None;
@@ -1059,8 +1086,13 @@ impl App {
     }
 
     /// Re-root everything at `target` (also the PROCESS cwd, so the Source
-    /// Control view follows on the next view switch).
+    /// Control view follows on the next view switch). User-initiated
+    /// re-roots start the cwd-follow grace so heartbeat does not yank back.
     fn change_folder(&mut self, raw: &str) {
+        self.re_root(raw, true);
+    }
+
+    fn re_root(&mut self, raw: &str, hold: bool) {
         let raw = raw.trim();
         if raw.is_empty() {
             self.notice = Some("empty path".into());
@@ -1085,6 +1117,9 @@ impl App {
         let root = std::env::current_dir().unwrap_or(target);
         *self = App::new(root);
         self.notice = Some(format!("folder: {}", self.tree.root_name()));
+        if hold {
+            self.cwd_follow_hold = Some(std::time::Instant::now());
+        }
     }
 
     fn confirm_prompt(&mut self) {
@@ -1680,6 +1715,24 @@ fn row_index_at(body: BodyGeom, row_count: usize, mouse_row: u16) -> Option<usiz
     (index < row_count).then_some(index)
 }
 
+/// Snap back to the agent cwd unless the explorer is already there / in a
+/// subfolder, or the user is still browsing after a re-root.
+fn should_follow_cwd(
+    root: &Path,
+    cwd: &Path,
+    hold: Option<std::time::Instant>,
+    now: std::time::Instant,
+    grace: std::time::Duration,
+) -> bool {
+    if root == cwd || root.starts_with(cwd) {
+        return false;
+    }
+    match hold {
+        None => true,
+        Some(t) => now.saturating_duration_since(t) >= grace,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1753,6 +1806,58 @@ mod tests {
         assert_eq!(row_index_at(body, 100, 10), Some(14));
         assert_eq!(row_index_at(body, 100, 11), None, "footer row");
         assert_eq!(row_index_at(body, 6, 2), None, "past the last row");
+    }
+
+    #[test]
+    fn cwd_follow_leaves_subfolder_and_holds_parent() {
+        let cwd = PathBuf::from("proj").join("app");
+        let parent = PathBuf::from("proj");
+        let child = cwd.join("src");
+        let sibling = PathBuf::from("proj").join("other");
+        let t0 = std::time::Instant::now();
+        let grace = CWD_FOLLOW_HOLD;
+
+        assert!(!should_follow_cwd(&cwd, &cwd, None, t0, grace), "already there");
+        assert!(
+            !should_follow_cwd(&child, &cwd, None, t0, grace),
+            "drilled into a subfolder"
+        );
+        assert!(
+            should_follow_cwd(&parent, &cwd, None, t0, grace),
+            "parent with no hold snaps"
+        );
+        assert!(
+            !should_follow_cwd(&parent, &cwd, Some(t0), t0, grace),
+            "just went up"
+        );
+        assert!(
+            !should_follow_cwd(
+                &parent,
+                &cwd,
+                Some(t0),
+                t0 + std::time::Duration::from_secs(299),
+                grace
+            ),
+            "still within the hold"
+        );
+        assert!(
+            should_follow_cwd(
+                &parent,
+                &cwd,
+                Some(t0),
+                t0 + std::time::Duration::from_secs(300),
+                grace
+            ),
+            "hold expired"
+        );
+        assert!(
+            !should_follow_cwd(&sibling, &cwd, Some(t0), t0, grace),
+            "sibling while navigating"
+        );
+        assert!(
+            should_follow_cwd(&sibling, &cwd, None, t0, grace),
+            "agent cwd moved; snap"
+        );
     }
 
 }

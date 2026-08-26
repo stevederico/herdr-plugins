@@ -1,3 +1,7 @@
+0.8.0
+
+  Delay cwd snap
+
 0.7.1
 
   Fix duplicate explorer
