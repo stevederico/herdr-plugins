@@ -103,7 +103,8 @@ pub fn delete(path: &Path, is_dir: bool) -> io::Result<()> {
 }
 
 /// Copy text to the system clipboard by piping to the platform's clipboard
-/// tool (a console child of the TUI's own pty — no window is created).
+/// tool (a console child of the TUI's own pty — no window is created), and
+/// also OSC 52 to attached herdr clients so an SSH laptop gets the paste.
 pub fn copy_to_clipboard(text: &str) -> io::Result<()> {
     use std::io::Write;
     #[cfg(windows)]
@@ -112,6 +113,7 @@ pub fn copy_to_clipboard(text: &str) -> io::Result<()> {
     let candidates: &[&[&str]] = &[&["pbcopy"], &["wl-copy"], &["xclip", "-selection", "clipboard"]];
 
     let mut last_err = io::Error::new(io::ErrorKind::NotFound, "no clipboard tool found");
+    let mut native_ok = false;
     for argv in candidates {
         let spawned = std::process::Command::new(argv[0])
             .args(&argv[1..])
@@ -125,12 +127,18 @@ pub fn copy_to_clipboard(text: &str) -> io::Result<()> {
                     stdin.write_all(text.as_bytes())?;
                 }
                 child.wait()?;
-                return Ok(());
+                native_ok = true;
+                break;
             }
             Err(err) => last_err = err,
         }
     }
-    Err(last_err)
+    let remote = crate::clipboard::forward_to_clients(text);
+    if native_ok || remote > 0 {
+        Ok(())
+    } else {
+        Err(last_err)
+    }
 }
 
 /// Open the platform file manager with the path selected (best-effort).

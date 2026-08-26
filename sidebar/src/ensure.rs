@@ -44,6 +44,7 @@ use crate::snooze;
 /// focus, and respecting a tab the user toggled closed. Toggle mode (the
 /// action): open-or-focus-or-close, like VS Code's explorer shortcut.
 pub fn run(toggle: bool) -> std::io::Result<()> {
+    crate::clipboard::spawn_bridge();
     let Some(_lock) = Lock::acquire() else {
         return Ok(());
     };

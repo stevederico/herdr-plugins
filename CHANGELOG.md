@@ -1,3 +1,7 @@
+0.9.0
+
+  Forward remote copy
+
 0.8.0
 
   Delay cwd snap

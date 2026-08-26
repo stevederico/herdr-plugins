@@ -5,6 +5,7 @@
 
 pub mod actions;
 pub mod ansi;
+pub mod clipboard;
 pub mod diffview;
 pub mod ensure;
 pub mod fontsetup;
