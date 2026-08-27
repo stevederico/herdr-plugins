@@ -239,6 +239,11 @@ impl App {
         // The other view ships in this same binary — always available.
         let other_exe = std::env::current_exe().ok();
         let sidebar_state = sidebar::load_state();
+        let notice = if rows.is_empty() {
+            tree.list_error().map(|e| format!("can't list this folder: {e}"))
+        } else {
+            None
+        };
         let app = Self {
             tree,
             rows,
@@ -253,7 +258,7 @@ impl App {
             hovered: None,
             body: BodyGeom::default(),
             overlay: None,
-            notice: None,
+            notice,
             sidebar_state,
             other_exe,
             activity: ActivityZones::default(),
@@ -1107,7 +1112,9 @@ impl App {
         }
         let root = std::env::current_dir().unwrap_or(target);
         *self = App::new(root);
-        self.notice = Some(format!("folder: {}", self.tree.root_name()));
+        if self.notice.is_none() {
+            self.notice = Some(format!("folder: {}", self.tree.root_name()));
+        }
         if hold {
             self.cwd_follow_hold = Some(std::time::Instant::now());
         }
@@ -1292,7 +1299,11 @@ impl App {
         self.draw_header(frame, header);
 
         if self.rows.is_empty() {
-            frame.render_widget(Paragraph::new("  (empty)".dim().italic()), body);
+            let msg = match self.tree.list_error() {
+                Some(err) => format!("  (can't list this folder: {err})"),
+                None => "  (empty)".into(),
+            };
+            frame.render_widget(Paragraph::new(msg.dim().italic()), body);
         } else {
             let h = (body.height as usize).max(1);
             self.scroll = self.scroll.min(self.rows.len().saturating_sub(h));

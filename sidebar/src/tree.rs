@@ -27,6 +27,8 @@ pub struct Tree {
     expanded: BTreeSet<PathBuf>,
     cache: HashMap<PathBuf, Vec<Entry>>,
     pub show_hidden: bool,
+    /// Last `read_dir` failure; cleared on a successful listing.
+    list_error: Option<String>,
 }
 
 impl Tree {
@@ -36,6 +38,7 @@ impl Tree {
             expanded: BTreeSet::new(),
             cache: HashMap::new(),
             show_hidden: true,
+            list_error: None,
         }
     }
 
@@ -75,6 +78,11 @@ impl Tree {
         self.expanded.clear();
     }
 
+    /// Why the last uncached directory listing failed, if it did.
+    pub fn list_error(&self) -> Option<&str> {
+        self.list_error.as_deref()
+    }
+
     pub fn toggle(&mut self, path: &Path) {
         if !self.expanded.remove(path) {
             self.expanded.insert(path.to_path_buf());
@@ -85,16 +93,25 @@ impl Tree {
         if let Some(cached) = self.cache.get(dir) {
             return cached.clone();
         }
-        let mut entries: Vec<Entry> = fs::read_dir(dir)
-            .map(|rd| {
+        let mut entries: Vec<Entry> = match fs::read_dir(dir) {
+            Ok(rd) => {
+                self.list_error = None;
                 rd.filter_map(|e| e.ok())
                     .map(|e| Entry {
                         is_dir: e.file_type().map(|t| t.is_dir()).unwrap_or(false),
                         name: e.file_name().to_string_lossy().into_owned(),
                     })
                     .collect()
-            })
-            .unwrap_or_default();
+            }
+            Err(err) => {
+                self.list_error = Some(match err.kind() {
+                    std::io::ErrorKind::PermissionDenied => "permission denied".into(),
+                    std::io::ErrorKind::NotFound => "not found".into(),
+                    _ => err.to_string(),
+                });
+                Vec::new()
+            }
+        };
         sort_entries(&mut entries);
         self.cache.insert(dir.to_path_buf(), entries.clone());
         entries
@@ -262,6 +279,13 @@ mod tests {
     fn unreadable_or_missing_dir_is_empty() {
         let mut tree = Tree::new(std::env::temp_dir().join("aa-filetree-does-not-exist"));
         assert!(tree.rows().is_empty());
+    }
+
+    #[test]
+    fn missing_dir_sets_list_error() {
+        let mut tree = Tree::new(std::env::temp_dir().join("aa-filetree-does-not-exist"));
+        assert!(tree.rows().is_empty());
+        assert_eq!(tree.list_error(), Some("not found"));
     }
 
     #[test]

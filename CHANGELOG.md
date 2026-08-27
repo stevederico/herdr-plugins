@@ -1,3 +1,7 @@
+0.12.0
+
+  Show list errors
+
 0.11.0
 
   Copy preview text
