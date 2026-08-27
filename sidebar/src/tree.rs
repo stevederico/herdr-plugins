@@ -83,6 +83,16 @@ impl Tree {
         self.list_error.as_deref()
     }
 
+    /// Inject a child the OS listing hid (TCC empty-success on a parent).
+    pub fn seed_child(&mut self, name: String, is_dir: bool) {
+        let entries = self.cache.entry(self.root.clone()).or_default();
+        if entries.iter().all(|e| e.name != name) {
+            entries.push(Entry { name, is_dir });
+            sort_entries(entries);
+        }
+        self.list_error = Some("macOS hid other items here".into());
+    }
+
     pub fn toggle(&mut self, path: &Path) {
         if !self.expanded.remove(path) {
             self.expanded.insert(path.to_path_buf());
@@ -286,6 +296,18 @@ mod tests {
         let mut tree = Tree::new(std::env::temp_dir().join("aa-filetree-does-not-exist"));
         assert!(tree.rows().is_empty());
         assert_eq!(tree.list_error(), Some("not found"));
+    }
+
+    #[test]
+    fn seed_child_survives_empty_listing() {
+        let tmp = TempDir::new("seed");
+        let mut tree = Tree::new(tmp.0.clone());
+        assert!(tree.rows().is_empty());
+        assert!(tree.list_error().is_none());
+        tree.seed_child("projects".into(), true);
+        assert_eq!(names(&tree.rows()), vec![("projects".into(), 0)]);
+        assert!(tree.rows()[0].is_dir);
+        assert_eq!(tree.list_error(), Some("macOS hid other items here"));
     }
 
     #[test]

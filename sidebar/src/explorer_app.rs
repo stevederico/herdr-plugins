@@ -1110,8 +1110,23 @@ impl App {
             self.notice = Some(format!("not a folder: {raw}"));
             return;
         }
+        let prev_name = if hold {
+            self.tree
+                .root_path()
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+        } else {
+            None
+        };
         let root = std::env::current_dir().unwrap_or(target);
         *self = App::new(root);
+        if let Some(name) = prev_name {
+            if !self.rows.iter().any(|r| r.name == name) {
+                self.tree.seed_child(name, true);
+                self.rebuild();
+                self.notice = Some("macOS hid other items here".into());
+            }
+        }
         if self.notice.is_none() {
             self.notice = Some(format!("folder: {}", self.tree.root_name()));
         }
