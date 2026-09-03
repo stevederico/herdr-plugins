@@ -43,7 +43,7 @@ def git_root(cwd: str) -> str | None:
         return None
 
 def child_git_roots(cwd: str) -> list[str]:
-    """One-level scan: umbrella folders like Desktop/projects."""
+    """One-level scan: umbrella folders like ~/Projects."""
     p = Path(cwd)
     if not p.is_dir():
         return []

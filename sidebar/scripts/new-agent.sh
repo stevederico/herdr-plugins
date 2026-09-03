@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# New workspace + Grok. Cwd follows the focused pane (else ~/Desktop/projects).
+# New workspace + Grok. Cwd follows the focused pane (else ~/Projects).
 set -euo pipefail
 herdr="${HERDR_BIN_PATH:-herdr}"
-fallback="${HERDR_NEW_AGENT_CWD:-$HOME/Desktop/projects}"
+fallback="${HERDR_NEW_AGENT_CWD:-$HOME/Projects}"
 kind="${HERDR_NEW_AGENT_KIND:-grok}"
 
 python3 - "$herdr" "$fallback" "$kind" <<'PY'

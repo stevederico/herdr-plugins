@@ -1,3 +1,7 @@
+0.13.1
+
+  Fix stale paths
+
 0.13.0
 
   Fix parent listing
