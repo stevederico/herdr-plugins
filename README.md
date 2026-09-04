@@ -75,7 +75,7 @@ Steve's local [herdr](https://herdr.dev) plugins in one repo. `herdr-sidebar` is
 
 | Dir | Plugin id | What |
 |-----|-----------|------|
-| `sidebar/` | `herdr-sidebar` | Explorer + SCM + preview (0.15.0) |
+| `sidebar/` | `herdr-sidebar` | Explorer + SCM + preview (0.16.0) |
 | `git-badge/` | `herdr-git-badge` | Space `*` when dirty |
 | `space-title/` | `herdr-space-title` | Rename spaces from session titles |
 | `explorer/` | `herdr-explorer` | Thin file tree (optional) |
@@ -189,6 +189,7 @@ herdr plugin action invoke herdr-sidebar.open-sidebar    # linux / macos toggle
 herdr plugin action invoke herdr-sidebar.open-git        # separate SCM pane
 herdr plugin action invoke herdr-sidebar.new-agent       # new workspace + Grok
 herdr plugin action invoke herdr-sidebar.redeploy        # respawn every sidebar pane
+sidebar/target/release/herdr-sidebar --open-file todos.md  # agent: this tab's preview
 ```
 
 Windows uses the `-windows` action ids (`open-sidebar-windows`, and so on).

@@ -3,6 +3,7 @@
 //! activity bar switches between them IN PROCESS (instant, no flash); in
 //! separated mode the same binary runs one pane per view, pinned with
 //! `--view explorer|git`. `--preview <ctl>` runs the file-preview pane.
+//! `--open-file <path>` opens a file in this tab's preview (agent helper).
 //!
 //! The `--*` stdin→stdout helper modes serve the launcher scripts — see
 //! launch.rs.
@@ -67,11 +68,22 @@ fn main() -> std::io::Result<()> {
             };
             return viewer::run(std::path::Path::new(&control));
         }
+        Some("--open-file") => {
+            let Some(path) = std::env::args().nth(2) else {
+                eprintln!("herdr-sidebar: --open-file needs a path");
+                std::process::exit(2);
+            };
+            if let Err(e) = viewer::open_file(std::path::Path::new(&path)) {
+                eprintln!("herdr-sidebar: {e}");
+                std::process::exit(1);
+            }
+            return Ok(());
+        }
         Some("--view") => {}
         Some(other) => {
             eprintln!("herdr-sidebar: unknown argument `{other}`");
             eprintln!(
-                "usage: herdr-sidebar [--view explorer|git|--preview <ctl>|--launch-decision [git]|--focused-pane|--open-plan|--focused-tab|--agent-cwd|--has-token <pane_id>]"
+                "usage: herdr-sidebar [--view explorer|git|--preview <ctl>|--open-file <path>|--launch-decision [git]|--focused-pane|--open-plan|--focused-tab|--agent-cwd|--has-token <pane_id>]"
             );
             std::process::exit(2);
         }

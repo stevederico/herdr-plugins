@@ -373,6 +373,44 @@ pub fn tab_of(pane_list_json: &str, pane_id: &str) -> String {
         .unwrap_or_default()
 }
 
+/// Tab for `--open-file`: caller pane, then `HERDR_TAB_ID`, then the focused pane.
+pub fn tab_for_pane(
+    pane_list_json: &str,
+    pane_id: Option<&str>,
+    tab_id: Option<&str>,
+) -> String {
+    if let Some(id) = pane_id.filter(|s| !s.is_empty()) {
+        let tab = tab_of(pane_list_json, id);
+        if !tab.is_empty() {
+            return tab;
+        }
+    }
+    if let Some(tab) = tab_id.filter(|s| !s.is_empty() && is_flag_safe(s)) {
+        return tab.to_string();
+    }
+    focused_tab(pane_list_json)
+}
+
+/// Same as [`tab_for_pane`] using `HERDR_PANE_ID` / `HERDR_TAB_ID`.
+pub fn caller_tab(pane_list_json: &str) -> String {
+    tab_for_pane(
+        pane_list_json,
+        std::env::var("HERDR_PANE_ID").ok().as_deref(),
+        std::env::var("HERDR_TAB_ID").ok().as_deref(),
+    )
+}
+
+/// Explorer / unified sidebar pane in `tab_id` (the owner `open_in_pane` needs).
+pub fn sidebar_pane_in_tab(pane_list_json: &str, tab_id: &str) -> Option<String> {
+    let msg = serde_json::from_str::<PaneListMsg>(strip_bom(pane_list_json)).ok()?;
+    msg.result
+        .panes
+        .iter()
+        .find(|p| p.tab_id.as_deref() == Some(tab_id) && p.is_explorer())
+        .and_then(|p| p.pane_id.clone())
+        .filter(|id| is_flag_safe(id))
+}
+
 /// All tab ids present in a `pane list` JSON — the live-tab set the snooze
 /// cleanup checks markers against.
 pub fn live_tabs(pane_list_json: &str) -> std::collections::BTreeSet<String> {
@@ -818,5 +856,30 @@ mod tests {
                {"pane_id":"s","tab_id":"w1:t1","cwd":"/projects/other"}"#,
         );
         assert_eq!(agent_cwd(&json), "/projects/other");
+    }
+
+    #[test]
+    fn sidebar_pane_in_tab_finds_explorer_in_that_tab() {
+        let json = tab_with_chrome_and_agent();
+        assert_eq!(sidebar_pane_in_tab(&json, "w1:t1").as_deref(), Some("e"));
+        assert_eq!(sidebar_pane_in_tab(&json, "w1:t9"), None);
+        assert_eq!(sidebar_pane_in_tab("not json", "w1:t1"), None);
+    }
+
+    #[test]
+    fn tab_for_pane_prefers_caller_then_tab_then_focus() {
+        let json = pane_list(
+            r#"{"pane_id":"w1:p1","focused":true,"tab_id":"w1:t1","cwd":"/a"},
+               {"pane_id":"w1:p2","tab_id":"w1:t2","cwd":"/b"},
+               {"pane_id":"e","label":"Explorer","tab_id":"w1:t2","tokens":{"herdr-sidebar-explorer":1}}"#,
+        );
+        assert_eq!(tab_for_pane(&json, Some("w1:p2"), Some("w1:t1")), "w1:t2");
+        assert_eq!(tab_for_pane(&json, None, Some("w1:t2")), "w1:t2");
+        assert_eq!(tab_for_pane(&json, None, None), "w1:t1");
+        assert_eq!(tab_for_pane(&json, Some("missing"), Some("w1:t2")), "w1:t2");
+        assert_eq!(
+            sidebar_pane_in_tab(&json, &tab_for_pane(&json, Some("w1:p2"), None)).as_deref(),
+            Some("e")
+        );
     }
 }

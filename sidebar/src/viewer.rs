@@ -1328,6 +1328,40 @@ fn draw_cell_image(frame: &mut Frame, area: Rect, img: &crate::media::CellImage)
 // Client side: how the sidebar views open things in the viewer pane.
 // ---------------------------------------------------------------------------
 
+/// Agent/CLI entry: open `path` in this tab's preview (same as clicking it).
+/// Needs a live sidebar in the caller's tab (`HERDR_PANE_ID` / `HERDR_TAB_ID`).
+pub fn open_file(path: &Path) -> Result<(), String> {
+    let joined = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map_err(|e| format!("cwd: {e}"))?
+            .join(path)
+    };
+    let path = joined
+        .canonicalize()
+        .map_err(|e| format!("{}: {e}", joined.display()))?;
+    if !path.is_file() {
+        return Err(format!("{} is not a file", path.display()));
+    }
+    let json = ipc::call_text("pane.list", serde_json::json!({}))
+        .map_err(|e| format!("pane.list: {e}"))?;
+    let tab = crate::launch::caller_tab(&json);
+    if tab.is_empty() {
+        return Err("not inside a herdr tab".into());
+    }
+    let Some(sidebar) = crate::launch::sidebar_pane_in_tab(&json, &tab) else {
+        return Err("no sidebar in this tab".into());
+    };
+    let sibling = crate::launch::sibling_agent_cwd(&json, &sidebar);
+    let cwd = if sibling.is_empty() {
+        path.parent().unwrap_or(path.as_path()).to_path_buf()
+    } else {
+        PathBuf::from(sibling)
+    };
+    open_in_pane(&sidebar, &cwd, &file_request(&path))
+}
+
 /// Write `payload` to the caller's control file and make sure a live viewer
 /// pane exists on the far right of the tab. Errors are human-readable notices.
 pub fn open_in_pane(my_pane_id: &str, spawn_cwd: &Path, payload: &str) -> Result<(), String> {

@@ -1,3 +1,7 @@
+0.16.0
+
+  Open file preview
+
 0.15.0
 
   Document sidebar preview
