@@ -1,3 +1,7 @@
+0.14.0
+
+  Reload changed files
+
 0.13.1
 
   Fix stale paths

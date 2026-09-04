@@ -2,9 +2,11 @@
 //! (the tree stays visible, like VS Code's editor area). The sidebar keeps
 //! ONE viewer pane per tab and steers it through a small CONTROL FILE: each
 //! click writes a request there; the running viewer polls it and reloads in
-//! place, so repeated clicks never churn panes. Diff requests re-run git
-//! every couple of seconds, so the diff live-updates while you edit.
-//! `q`/Esc (or clicking the ✕ header) closes the pane itself.
+//! place, so repeated clicks never churn panes. File previews re-read the
+//! path when mtime/size changes (skipped while the buffer is dirty), so an
+//! agent writing the open file shows up without another click. Diff requests
+//! re-run git every couple of seconds, so the diff live-updates while you
+//! edit. `q`/Esc (or clicking the ✕ header) closes the pane itself.
 //!
 //! The tail of this module is the CLIENT side — the request format plus the
 //! ensure-a-viewer-pane logic both sidebar views share.
@@ -738,6 +740,78 @@ fn read_control(control: &Path) -> Option<Request> {
     parse_request(&buf)
 }
 
+fn file_stamp(path: &Path) -> Option<(std::time::SystemTime, u64)> {
+    let meta = std::fs::metadata(path).ok()?;
+    Some((meta.modified().ok()?, meta.len()))
+}
+
+/// Re-read `request` into `doc`, keeping scroll / markdown toggle / cursor.
+fn reload_keeping_view(doc: &mut Doc, request: &Request) {
+    let scroll = doc.scroll;
+    let md_render = doc.md_render;
+    let cursor_row = doc.cursor_row;
+    let cursor_col = doc.cursor_col;
+    *doc = load(request);
+    if doc.is_markdown() {
+        doc.md_render = md_render;
+    }
+    let max = doc.line_count().saturating_sub(1);
+    doc.scroll = scroll.min(max);
+    doc.cursor_row = cursor_row;
+    doc.cursor_col = cursor_col;
+    doc.clamp_cursor();
+    doc.sel = None;
+    doc.sel_anchor = None;
+}
+
+/// Follow the control file and, for an open file, disk mtime/size.
+fn follow_source(
+    control: &Path,
+    current: &mut Option<Request>,
+    doc: &mut Doc,
+    seen_stamp: &mut Option<(std::time::SystemTime, u64)>,
+    beat: u64,
+) {
+    let target = read_control(control);
+    if target != *current {
+        let same_file = matches!(
+            (&*current, &target),
+            (Some(Request::File(a)), Some(Request::File(b))) if a == b
+        );
+        if same_file && doc.dirty {
+            return;
+        }
+        *current = target;
+        if let Some(request) = current.as_ref() {
+            *doc = load(request);
+            report_identity(&doc.name);
+        }
+        *seen_stamp = match current {
+            Some(Request::File(p)) => file_stamp(p),
+            _ => None,
+        };
+        return;
+    }
+    if doc.dirty {
+        return;
+    }
+    match current.as_ref() {
+        Some(request @ Request::File(path)) => {
+            let now = file_stamp(path);
+            if now != *seen_stamp {
+                *seen_stamp = now;
+                reload_keeping_view(doc, request);
+            }
+        }
+        Some(request @ Request::Diff { .. }) if beat.is_multiple_of(8) => {
+            let keep = doc.scroll;
+            *doc = load(request);
+            doc.scroll = keep.min(doc.line_count().saturating_sub(1));
+        }
+        _ => {}
+    }
+}
+
 /// Tag our pane (heartbeat-stamped, see launch::HEARTBEAT_STALE_SECS) and
 /// title it with the shown document's name.
 fn report_identity(doc_name: &str) {
@@ -795,6 +869,10 @@ pub fn run(control: &Path) -> std::io::Result<()> {
     );
     let mut current = read_control(control);
     let mut doc = current.as_ref().map(load).unwrap_or_else(Doc::empty_wait);
+    let mut seen_stamp = match &current {
+        Some(Request::File(p)) => file_stamp(p),
+        _ => None,
+    };
     report_identity(&doc.name);
 
     // Blank the primary screen so pane handoffs never flash the shell.
@@ -997,36 +1075,12 @@ pub fn run(control: &Path) -> std::io::Result<()> {
                 _ => {}
             }
         } else {
-            // Idle: heartbeat, follow the control file, and live-refresh diffs.
             beat += 1;
             if beat.is_multiple_of(20) {
                 report_identity(&doc.name);
             }
-            let target = read_control(control);
-            if target != current {
-                // Don't clobber unsaved edits when the sidebar re-sends the same file.
-                let same_file = matches!(
-                    (&current, &target),
-                    (Some(Request::File(a)), Some(Request::File(b))) if a == b
-                );
-                if same_file && doc.dirty {
-                    // keep buffer
-                } else {
-                    current = target;
-                    if let Some(request) = &current {
-                        doc = load(request);
-                        report_identity(&doc.name);
-                    }
-                }
-            } else if beat.is_multiple_of(8)
-                && !doc.dirty
-                && let Some(request @ Request::Diff { .. }) = &current
-            {
-                let keep = doc.scroll;
-                doc = load(request);
-                doc.scroll = keep.min(doc.line_count().saturating_sub(1));
-            }
         }
+        follow_source(control, &mut current, &mut doc, &mut seen_stamp, beat);
     };
     let _ = crossterm::execute!(std::io::stdout(), DisableMouseCapture);
     ratatui::restore();
@@ -1882,6 +1936,39 @@ mod tests {
             Some(Request::File(PathBuf::from("C:/plain.txt")))
         );
         assert_eq!(parse_request("  "), None);
+    }
+
+    #[test]
+    fn file_stamp_tracks_rewrite() {
+        let path = std::env::temp_dir().join(format!("herdr-stamp-{}.md", std::process::id()));
+        std::fs::write(&path, "a").unwrap();
+        let first = file_stamp(&path);
+        std::fs::write(&path, "bb").unwrap();
+        let second = file_stamp(&path);
+        let _ = std::fs::remove_file(&path);
+        assert_ne!(first, second);
+        assert!(first.is_some() && second.is_some());
+    }
+
+    #[test]
+    fn reload_keeps_raw_markdown_toggle() {
+        let path = std::env::temp_dir().join(format!("herdr-md-live-{}.md", std::process::id()));
+        std::fs::write(&path, "# a\n").unwrap();
+        let req = Request::File(path.clone());
+        let mut doc = load(&req);
+        assert!(doc.md_render);
+        doc.md_render = false;
+        std::fs::write(&path, "# b\nhello\n").unwrap();
+        reload_keeping_view(&mut doc, &req);
+        let _ = std::fs::remove_file(&path);
+        assert!(!doc.md_render);
+        assert!(
+            doc.buffer
+                .as_ref()
+                .is_some_and(|b| b.iter().any(|l| l.contains("hello"))),
+            "{:?}",
+            doc.buffer
+        );
     }
 
     #[test]
