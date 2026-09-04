@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Report $status=🔄/✅/⚠️ from workspace agent_status. Idle clears the token.
+# Report $status=🔨/✅/⚠️/⚪ from workspace agent_status.
 set -euo pipefail
 herdr="${HERDR_BIN_PATH:-herdr}"
 source_id="herdr-space-status"
@@ -11,12 +11,14 @@ import json, os, subprocess
 herdr = os.environ["HERDR_BIN"]
 source = os.environ["SOURCE_ID"]
 
-# One glyph per state. Idle/unknown: no mark.
+# One glyph per state. Unknown uses idle.
 EMOJI = {
-    "working": "🔄",
+    "working": "🔨",
     "done": "✅",
     "blocked": "⚠️",
+    "idle": "⚪",
 }
+IDLE = EMOJI["idle"]
 
 def jcmd(*args):
     try:
@@ -38,5 +40,5 @@ for w in ws_rows:
     wid = w.get("workspace_id") or w.get("id")
     if not wid:
         continue
-    set_status(wid, EMOJI.get(w.get("agent_status") or ""))
+    set_status(wid, EMOJI.get(w.get("agent_status") or "", IDLE))
 PY

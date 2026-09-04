@@ -67,7 +67,7 @@ Steve's local [herdr](https://herdr.dev) plugins in one repo. `herdr-sidebar` is
 
 ### 🧩 **Workspace helpers**
 - **git-badge** marks spaces `*` when the worktree is dirty
-- **space-status** puts 🔄 / ✅ / ⚠️ on spaces that are working, done, or blocked
+- **space-status** puts 🔨 / ✅ / ⚠️ / ⚪ on spaces (working, done, blocked, idle)
 - **space-title** renames spaces from the Grok/agent session title
 - **explorer** is a thin leftover file tree. Keep it disabled if you run the sidebar
 
@@ -79,7 +79,7 @@ Steve's local [herdr](https://herdr.dev) plugins in one repo. `herdr-sidebar` is
 |-----|-----------|------|
 | `sidebar/` | `herdr-sidebar` | Explorer + SCM + preview (0.18.0) |
 | `git-badge/` | `herdr-git-badge` | Space `*` when dirty |
-| `space-status/` | `herdr-space-status` | 🔄 working, ✅ done, ⚠️ blocked |
+| `space-status/` | `herdr-space-status` | 🔨 working, ✅ done, ⚠️ blocked, ⚪ idle |
 | `space-title/` | `herdr-space-title` | Rename spaces from session titles |
 | `explorer/` | `herdr-explorer` | Thin file tree (optional) |
 

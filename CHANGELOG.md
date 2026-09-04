@@ -1,3 +1,8 @@
+0.20.0
+
+  Use hammer emoji
+  Mark idle spaces
+
 0.19.0
 
   Add status emojis

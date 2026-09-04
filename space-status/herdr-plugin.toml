@@ -1,8 +1,8 @@
-# Status emoji on spaces: 🔄 working, ✅ done, ⚠️ blocked. Idle is blank.
+# Status emoji on spaces: 🔨 working, ✅ done, ⚠️ blocked, ⚪ idle.
 id = "herdr-space-status"
 name = "herdr-space-status"
 version = "0.1.0"
-description = "Emoji on spaces for working, done, and needs-attention"
+description = "Emoji on spaces: hammer working, check done, warning blocked, white idle"
 min_herdr_version = "0.7.0"
 platforms = ["linux", "macos"]
 
