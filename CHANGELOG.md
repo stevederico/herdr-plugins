@@ -1,3 +1,7 @@
+0.19.0
+
+  Add status emojis
+
 0.18.0
 
   Edit markdown by typing

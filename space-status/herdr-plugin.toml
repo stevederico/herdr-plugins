@@ -1,0 +1,29 @@
+# Status emoji on spaces: 🔄 working, ✅ done, ⚠️ blocked. Idle is blank.
+id = "herdr-space-status"
+name = "herdr-space-status"
+version = "0.1.0"
+description = "Emoji on spaces for working, done, and needs-attention"
+min_herdr_version = "0.7.0"
+platforms = ["linux", "macos"]
+
+[[events]]
+on = "pane.agent_status_changed"
+command = ["bash", "scripts/refresh.sh"]
+
+[[events]]
+on = "workspace.focused"
+command = ["bash", "scripts/refresh.sh"]
+
+[[events]]
+on = "tab.focused"
+command = ["bash", "scripts/refresh.sh"]
+
+[[events]]
+on = "pane.focused"
+command = ["bash", "scripts/refresh.sh"]
+
+[[actions]]
+id = "refresh"
+title = "Refresh space status"
+description = "Re-scan workspace agent state and update status emojis"
+command = ["bash", "scripts/refresh.sh"]

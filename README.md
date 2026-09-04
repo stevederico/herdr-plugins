@@ -24,6 +24,7 @@ cd herdr-plugins
 herdr plugin link ./sidebar
 herdr plugin link ./git-badge
 herdr plugin link ./space-title
+herdr plugin link ./space-status
 ```
 
 Focus a tab. The sidebar docks on the left. Click a file: the preview opens on the far right.
@@ -66,6 +67,7 @@ Steve's local [herdr](https://herdr.dev) plugins in one repo. `herdr-sidebar` is
 
 ### 🧩 **Workspace helpers**
 - **git-badge** marks spaces `*` when the worktree is dirty
+- **space-status** puts 🔄 / ✅ / ⚠️ on spaces that are working, done, or blocked
 - **space-title** renames spaces from the Grok/agent session title
 - **explorer** is a thin leftover file tree. Keep it disabled if you run the sidebar
 
@@ -77,6 +79,7 @@ Steve's local [herdr](https://herdr.dev) plugins in one repo. `herdr-sidebar` is
 |-----|-----------|------|
 | `sidebar/` | `herdr-sidebar` | Explorer + SCM + preview (0.18.0) |
 | `git-badge/` | `herdr-git-badge` | Space `*` when dirty |
+| `space-status/` | `herdr-space-status` | 🔄 working, ✅ done, ⚠️ blocked |
 | `space-title/` | `herdr-space-title` | Rename spaces from session titles |
 | `explorer/` | `herdr-explorer` | Thin file tree (optional) |
 
@@ -177,6 +180,7 @@ herdr plugin uninstall herdr-sidebar   # if still GitHub-managed
 herdr plugin link ~/Projects/herdr-plugins/sidebar
 herdr plugin link ~/Projects/herdr-plugins/git-badge
 herdr plugin link ~/Projects/herdr-plugins/space-title
+herdr plugin link ~/Projects/herdr-plugins/space-status
 herdr plugin link ~/Projects/herdr-plugins/explorer   # optional
 herdr plugin disable herdr-explorer                   # if you only want sidebar
 ```
