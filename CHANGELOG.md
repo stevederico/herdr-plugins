@@ -1,3 +1,7 @@
+0.21.0
+
+  Scrub home paths
+
 0.20.0
 
   Use hammer emoji
