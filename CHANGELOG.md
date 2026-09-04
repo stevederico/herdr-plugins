@@ -1,3 +1,7 @@
+0.15.0
+
+  Document sidebar preview
+
 0.14.1
 
   Follow disk writes
