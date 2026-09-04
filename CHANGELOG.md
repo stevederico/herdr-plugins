@@ -1,3 +1,7 @@
+0.14.1
+
+  Follow disk writes
+
 0.14.0
 
   Reload changed files

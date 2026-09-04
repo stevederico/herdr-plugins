@@ -3,10 +3,9 @@
 //! ONE viewer pane per tab and steers it through a small CONTROL FILE: each
 //! click writes a request there; the running viewer polls it and reloads in
 //! place, so repeated clicks never churn panes. File previews re-read the
-//! path when mtime/size changes (skipped while the buffer is dirty), so an
-//! agent writing the open file shows up without another click. Diff requests
-//! re-run git every couple of seconds, so the diff live-updates while you
-//! edit. `q`/Esc (or clicking the ✕ header) closes the pane itself.
+//! path when its bytes change (agent writes included; unsaved local edits
+//! lose if disk moved). Diff requests re-run git every couple of seconds.
+//! `q`/Esc (or clicking the ✕ header) closes the pane itself.
 //!
 //! The tail of this module is the CLIENT side — the request format plus the
 //! ensure-a-viewer-pane logic both sidebar views share.
@@ -33,8 +32,10 @@ use crate::ipc;
 /// and reuse it (distinct from the sidebar's own identity tokens).
 pub const METADATA_SOURCE: &str = "herdr-sidebar-preview";
 
-/// How often the control file is re-checked while idle.
-const POLL: Duration = Duration::from_millis(250);
+/// Idle sleep between disk checks. Do not `event::poll(timeout)` for this:
+/// herdr PTYs have been seen to ignore the timeout, which froze follow
+/// until a keypress.
+const POLL: Duration = Duration::from_millis(80);
 
 /// Preview size guards: don't slurp huge files into a pane.
 const MAX_BYTES: usize = 1024 * 1024;
@@ -740,9 +741,31 @@ fn read_control(control: &Path) -> Option<Request> {
     parse_request(&buf)
 }
 
-fn file_stamp(path: &Path) -> Option<(std::time::SystemTime, u64)> {
+fn fnv1a(bytes: &[u8], len: u64) -> u64 {
+    let mut h = 0xcbf29ce484222325u64;
+    for &b in bytes {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    h ^ len.rotate_left(32)
+}
+
+/// Content identity for the open path. Text files hash bytes (mtime-preserving
+/// writes still show up). Media / huge files use mtime+len so we don't slurp.
+fn file_digest(path: &Path) -> Option<u64> {
     let meta = std::fs::metadata(path).ok()?;
-    Some((meta.modified().ok()?, meta.len()))
+    let len = meta.len();
+    if crate::media::is_media(path) || len > MAX_BYTES as u64 {
+        let nanos = meta
+            .modified()
+            .ok()?
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()?
+            .as_nanos() as u64;
+        return Some(nanos ^ len.rotate_left(17));
+    }
+    let bytes = std::fs::read(path).ok()?;
+    Some(fnv1a(&bytes, len))
 }
 
 /// Re-read `request` into `doc`, keeping scroll / markdown toggle / cursor.
@@ -764,42 +787,32 @@ fn reload_keeping_view(doc: &mut Doc, request: &Request) {
     doc.sel_anchor = None;
 }
 
-/// Follow the control file and, for an open file, disk mtime/size.
+/// Follow the control file and, for an open file, on-disk bytes.
 fn follow_source(
     control: &Path,
     current: &mut Option<Request>,
     doc: &mut Doc,
-    seen_stamp: &mut Option<(std::time::SystemTime, u64)>,
+    seen_digest: &mut Option<u64>,
     beat: u64,
 ) {
     let target = read_control(control);
     if target != *current {
-        let same_file = matches!(
-            (&*current, &target),
-            (Some(Request::File(a)), Some(Request::File(b))) if a == b
-        );
-        if same_file && doc.dirty {
-            return;
-        }
         *current = target;
         if let Some(request) = current.as_ref() {
             *doc = load(request);
             report_identity(&doc.name);
         }
-        *seen_stamp = match current {
-            Some(Request::File(p)) => file_stamp(p),
+        *seen_digest = match current {
+            Some(Request::File(p)) => file_digest(p),
             _ => None,
         };
         return;
     }
-    if doc.dirty {
-        return;
-    }
     match current.as_ref() {
         Some(request @ Request::File(path)) => {
-            let now = file_stamp(path);
-            if now != *seen_stamp {
-                *seen_stamp = now;
+            let now = file_digest(path);
+            if now != *seen_digest {
+                *seen_digest = now;
                 reload_keeping_view(doc, request);
             }
         }
@@ -869,8 +882,8 @@ pub fn run(control: &Path) -> std::io::Result<()> {
     );
     let mut current = read_control(control);
     let mut doc = current.as_ref().map(load).unwrap_or_else(Doc::empty_wait);
-    let mut seen_stamp = match &current {
-        Some(Request::File(p)) => file_stamp(p),
+    let mut seen_digest = match &current {
+        Some(Request::File(p)) => file_digest(p),
         _ => None,
     };
     report_identity(&doc.name);
@@ -893,7 +906,8 @@ pub fn run(control: &Path) -> std::io::Result<()> {
             break Err(e);
         }
         let max = doc.line_count().saturating_sub(1);
-        if event::poll(POLL)? {
+        let idle = !event::poll(Duration::ZERO)?;
+        if !idle {
             match event::read()? {
                 Event::Key(key) if key.kind == KeyEventKind::Press => {
                     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
@@ -1074,13 +1088,15 @@ pub fn run(control: &Path) -> std::io::Result<()> {
                 }
                 _ => {}
             }
-        } else {
-            beat += 1;
-            if beat.is_multiple_of(20) {
-                report_identity(&doc.name);
-            }
         }
-        follow_source(control, &mut current, &mut doc, &mut seen_stamp, beat);
+        beat += 1;
+        if beat.is_multiple_of(25) {
+            report_identity(&doc.name);
+        }
+        follow_source(control, &mut current, &mut doc, &mut seen_digest, beat);
+        if idle {
+            std::thread::sleep(POLL);
+        }
     };
     let _ = crossterm::execute!(std::io::stdout(), DisableMouseCapture);
     ratatui::restore();
@@ -1939,15 +1955,43 @@ mod tests {
     }
 
     #[test]
-    fn file_stamp_tracks_rewrite() {
-        let path = std::env::temp_dir().join(format!("herdr-stamp-{}.md", std::process::id()));
+    fn file_digest_tracks_rewrite() {
+        let path = std::env::temp_dir().join(format!("herdr-digest-{}.md", std::process::id()));
         std::fs::write(&path, "a").unwrap();
-        let first = file_stamp(&path);
-        std::fs::write(&path, "bb").unwrap();
-        let second = file_stamp(&path);
+        let first = file_digest(&path);
+        std::fs::write(&path, "b").unwrap();
+        let second = file_digest(&path);
+        let again = file_digest(&path);
         let _ = std::fs::remove_file(&path);
         assert_ne!(first, second);
+        assert_eq!(second, again);
         assert!(first.is_some() && second.is_some());
+    }
+
+    #[test]
+    fn follow_source_reloads_agent_write_even_if_dirty() {
+        let dir = std::env::temp_dir();
+        let pid = std::process::id();
+        let path = dir.join(format!("herdr-follow-{pid}.md"));
+        let ctl = dir.join(format!("herdr-follow-{pid}.ctl"));
+        std::fs::write(&path, "# old\n").unwrap();
+        std::fs::write(&ctl, file_request(&path)).unwrap();
+        let mut current = read_control(&ctl);
+        let mut doc = current.as_ref().map(load).unwrap_or_else(Doc::empty_wait);
+        let mut seen = match &current {
+            Some(Request::File(p)) => file_digest(p),
+            _ => None,
+        };
+        doc.dirty = true;
+        std::fs::write(&path, "# new from agent\n").unwrap();
+        follow_source(&ctl, &mut current, &mut doc, &mut seen, 0);
+        let buf = doc.buffer.clone();
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&ctl);
+        assert!(
+            buf.as_ref().is_some_and(|b| b.iter().any(|l| l.contains("new from agent"))),
+            "{buf:?}"
+        );
     }
 
     #[test]
