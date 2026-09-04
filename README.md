@@ -276,7 +276,7 @@ herdr plugin link ./sidebar
 
 ## 📄 License
 
-MIT License.
+[MIT License](LICENSE).
 
 <br />
 

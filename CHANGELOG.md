@@ -1,3 +1,7 @@
+0.22.0
+
+  Add MIT license
+
 0.21.0
 
   Scrub home paths
