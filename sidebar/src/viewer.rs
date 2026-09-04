@@ -180,6 +180,17 @@ impl Doc {
         self.buffer.is_some() && self.path.is_some() && !self.md_render
     }
 
+    /// Leave rendered markdown so the next key can type. Cursor stays.
+    fn begin_raw_edit(&mut self) {
+        if !self.md_render {
+            return;
+        }
+        self.md_render = false;
+        self.sel = None;
+        self.sel_anchor = None;
+        self.clamp_cursor();
+    }
+
     fn clamp_cursor(&mut self) {
         let Some(buf) = &self.buffer else { return };
         if buf.is_empty() {
@@ -662,7 +673,7 @@ fn load_file(target: &Path) -> Doc {
                 numbered: true,
                 scroll: 0,
                 media: None,
-                md_render: crate::md::is_markdown(target),
+                md_render: false,
                 md_toggle: None,
             sel: None,
             sel_anchor: None,
@@ -928,6 +939,12 @@ pub fn run(control: &Path) -> std::io::Result<()> {
                             doc.backspace_word();
                             doc.ensure_visible(page);
                         }
+                        // Rendered markdown: letters type, not hotkeys. Chip toggles; Esc closes.
+                        KeyCode::Char(c) if doc.md_render && doc.is_markdown() && !chord => {
+                            doc.begin_raw_edit();
+                            doc.insert_char(c);
+                            doc.ensure_visible(page);
+                        }
                         // q closes read-only previews; in edit mode type q as text (Esc closes).
                         KeyCode::Char('q') if !doc.editable() => {
                             close_own_pane(control);
@@ -937,13 +954,6 @@ pub fn run(control: &Path) -> std::io::Result<()> {
                             if let Some(path) = &doc.path {
                                 crate::media::open_external(path);
                             }
-                        }
-                        // m flips Rendered → Raw only while rendered; in raw, type m (click chip back).
-                        KeyCode::Char('m') if doc.is_markdown() && !doc.editable() => {
-                            doc.md_render = !doc.md_render;
-                            doc.scroll = 0;
-                            doc.sel = None;
-                            doc.sel_anchor = None;
                         }
                         KeyCode::Char('y') if !doc.editable() => doc.copy_selection(),
                         KeyCode::Up => {
@@ -1292,7 +1302,7 @@ fn draw_doc(frame: &mut Frame, doc: &mut Doc, theme: IconTheme) -> usize {
         } else {
             format!("  · {}", doc.notice)
         };
-        format!(" ^a select all  ^c copy  click box  m raw  esc close{status}")
+        format!(" type to edit  ^a all  ^c copy  click box  esc close{status}")
     } else {
         if doc.path.as_deref().is_some_and(crate::media::is_media) {
             " o open in Preview  esc close".into()
@@ -2030,20 +2040,30 @@ mod tests {
     }
 
     #[test]
-    fn markdown_m_hotkey_only_while_rendered() {
-        let path = std::env::temp_dir().join(format!("herdr-md-m-{}.md", std::process::id()));
+    fn markdown_opens_editable() {
+        let path = std::env::temp_dir().join(format!("herdr-md-open-{}.md", std::process::id()));
+        std::fs::write(&path, "# hi\n").unwrap();
+        let doc = load(&Request::File(path.clone()));
+        let _ = std::fs::remove_file(&path);
+        assert!(doc.is_markdown());
+        assert!(!doc.md_render);
+        assert!(doc.editable());
+    }
+
+    #[test]
+    fn typing_in_rendered_markdown_starts_edit() {
+        let path = std::env::temp_dir().join(format!("herdr-md-type-{}.md", std::process::id()));
         std::fs::write(&path, "# hi\n").unwrap();
         let mut doc = load(&Request::File(path.clone()));
         let _ = std::fs::remove_file(&path);
-        assert!(doc.is_markdown());
-        assert!(doc.md_render);
+        doc.md_render = true;
         assert!(!doc.editable());
-        doc.md_render = false;
+        doc.begin_raw_edit();
+        doc.insert_char('q');
         assert!(doc.editable());
-        doc.insert_char('m');
         assert!(!doc.md_render);
         assert!(
-            doc.buffer.as_ref().is_some_and(|b| b.iter().any(|l| l.contains('m'))),
+            doc.buffer.as_ref().is_some_and(|b| b.iter().any(|l| l.contains('q'))),
             "{:?}",
             doc.buffer
         );
@@ -2055,7 +2075,7 @@ mod tests {
         std::fs::write(&path, "# a\n").unwrap();
         let req = Request::File(path.clone());
         let mut doc = load(&req);
-        assert!(doc.md_render);
+        assert!(!doc.md_render);
         doc.md_render = false;
         std::fs::write(&path, "# b\nhello\n").unwrap();
         reload_keeping_view(&mut doc, &req);

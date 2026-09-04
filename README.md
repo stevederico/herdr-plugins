@@ -53,8 +53,8 @@ Steve's local [herdr](https://herdr.dev) plugins in one repo. `herdr-sidebar` is
 ### 👁️ **File Preview**
 - **Opens on the far right** (explorer | agent | preview). One viewer per tab; clicks reuse it
 - **Live-reloads from disk** when an agent (or anything else) writes the open file. Markdown included. ~80ms
-- **Markdown** renders headings, lists, fences, emphasis, and task boxes. Click a box to toggle. `m` in Rendered flips to Raw; click the chip to flip back
-- **Edit** in raw mode: type, Ctrl+S to save, Ctrl+A / Ctrl+C to copy
+- **Markdown** opens as an editor. Click the chip for Rendered (headings, lists, fences, task boxes). Type in Rendered to drop back into Raw. Click a box to toggle tasks
+- **Edit**: type, Ctrl+S to save, Ctrl+A / Ctrl+C to copy
 - **Images and video** rasterize in the pane. `o` opens the real file at full resolution
 - **Full-size preview** (default on): other panes park while you read; Esc restores them
 
@@ -75,7 +75,7 @@ Steve's local [herdr](https://herdr.dev) plugins in one repo. `herdr-sidebar` is
 
 | Dir | Plugin id | What |
 |-----|-----------|------|
-| `sidebar/` | `herdr-sidebar` | Explorer + SCM + preview (0.17.0) |
+| `sidebar/` | `herdr-sidebar` | Explorer + SCM + preview (0.18.0) |
 | `git-badge/` | `herdr-git-badge` | Space `*` when dirty |
 | `space-title/` | `herdr-space-title` | Rename spaces from session titles |
 | `explorer/` | `herdr-explorer` | Thin file tree (optional) |
@@ -129,9 +129,10 @@ Hotkey chips live in **Settings**. Footer chips are off by default.
 
 | Key | Action |
 |-----|--------|
-| `m` | rendered markdown: switch to Raw (raw: click chip) |
+| type | edit (Rendered: first key drops into Raw) |
+| click chip | markdown Raw / Rendered |
 | click box | toggle `- [ ]` / `- [x]` |
-| type / Ctrl+S | edit and save (raw) |
+| Ctrl+S | save |
 | Ctrl+A / Ctrl+C | select all / copy |
 | `o` | open image or video at full resolution |
 | `Esc` / `q` | close |

@@ -1,3 +1,7 @@
+0.18.0
+
+  Edit markdown by typing
+
 0.17.0
 
   Type m in raw
