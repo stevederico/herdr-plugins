@@ -938,7 +938,8 @@ pub fn run(control: &Path) -> std::io::Result<()> {
                                 crate::media::open_external(path);
                             }
                         }
-                        KeyCode::Char('m') if doc.is_markdown() => {
+                        // m flips Rendered → Raw only while rendered; in raw, type m (click chip back).
+                        KeyCode::Char('m') if doc.is_markdown() && !doc.editable() => {
                             doc.md_render = !doc.md_render;
                             doc.scroll = 0;
                             doc.sel = None;
@@ -2025,6 +2026,26 @@ mod tests {
         assert!(
             buf.as_ref().is_some_and(|b| b.iter().any(|l| l.contains("new from agent"))),
             "{buf:?}"
+        );
+    }
+
+    #[test]
+    fn markdown_m_hotkey_only_while_rendered() {
+        let path = std::env::temp_dir().join(format!("herdr-md-m-{}.md", std::process::id()));
+        std::fs::write(&path, "# hi\n").unwrap();
+        let mut doc = load(&Request::File(path.clone()));
+        let _ = std::fs::remove_file(&path);
+        assert!(doc.is_markdown());
+        assert!(doc.md_render);
+        assert!(!doc.editable());
+        doc.md_render = false;
+        assert!(doc.editable());
+        doc.insert_char('m');
+        assert!(!doc.md_render);
+        assert!(
+            doc.buffer.as_ref().is_some_and(|b| b.iter().any(|l| l.contains('m'))),
+            "{:?}",
+            doc.buffer
         );
     }
 
