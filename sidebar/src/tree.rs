@@ -108,7 +108,7 @@ impl Tree {
                 self.list_error = None;
                 rd.filter_map(|e| e.ok())
                     .map(|e| Entry {
-                        is_dir: e.file_type().map(|t| t.is_dir()).unwrap_or(false),
+                        is_dir: entry_is_dir(&e),
                         name: e.file_name().to_string_lossy().into_owned(),
                     })
                     .collect()
@@ -122,6 +122,15 @@ impl Tree {
                 Vec::new()
             }
         };
+        // TCC / sshd: `read_dir` can succeed with zero names while the
+        // process cwd is still a child of `dir`. Seed that child so the
+        // tree is not a blank pane.
+        if entries.is_empty() {
+            if let Some(seed) = seed_cwd_child(dir) {
+                entries.push(seed);
+                self.list_error = Some("listing hid other items".into());
+            }
+        }
         sort_entries(&mut entries);
         self.cache.insert(dir.to_path_buf(), entries.clone());
         entries
@@ -170,6 +179,34 @@ pub fn sort_entries(entries: &mut [Entry]) {
 /// `.git` is always hidden; other dotfiles only when `show_hidden` is off.
 fn visible(name: &str, show_hidden: bool) -> bool {
     name != ".git" && (show_hidden || !name.starts_with('.'))
+}
+
+/// Follows symlinks so a linked project folder is still a folder.
+fn entry_is_dir(e: &fs::DirEntry) -> bool {
+    match e.file_type() {
+        Ok(t) if t.is_dir() => true,
+        Ok(t) if t.is_symlink() => e.path().is_dir(),
+        Ok(_) => false,
+        Err(_) => e.path().is_dir(),
+    }
+}
+
+/// Next path component of cwd under `dir`, if that child exists on disk.
+fn seed_cwd_child(dir: &Path) -> Option<Entry> {
+    let cwd = std::env::current_dir().ok()?;
+    let rel = cwd.strip_prefix(dir).ok()?;
+    let name = match rel.components().next()? {
+        std::path::Component::Normal(n) => n.to_string_lossy().into_owned(),
+        _ => return None,
+    };
+    if name.is_empty() {
+        return None;
+    }
+    let path = dir.join(&name);
+    path.exists().then(|| Entry {
+        is_dir: path.is_dir(),
+        name,
+    })
 }
 
 #[cfg(test)]
@@ -296,6 +333,22 @@ mod tests {
         let mut tree = Tree::new(std::env::temp_dir().join("aa-filetree-does-not-exist"));
         assert!(tree.rows().is_empty());
         assert_eq!(tree.list_error(), Some("not found"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlink_dir_counts_as_folder() {
+        let tmp = TempDir::new("symlink-dir");
+        tmp.mkdir("real");
+        tmp.touch("real/x.txt");
+        std::os::unix::fs::symlink(tmp.0.join("real"), tmp.0.join("link")).unwrap();
+        let mut tree = Tree::new(tmp.0.clone());
+        let link = tree
+            .rows()
+            .into_iter()
+            .find(|r| r.name == "link")
+            .expect("symlink dir should appear");
+        assert!(link.is_dir, "symlink-to-dir must be a folder");
     }
 
     #[test]

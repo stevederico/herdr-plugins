@@ -1,3 +1,8 @@
+0.24.0
+
+  Show symlink folders
+  Seed hidden listings
+
 0.23.0
 
   Star dirty folders
