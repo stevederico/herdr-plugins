@@ -597,6 +597,7 @@ impl App {
         };
         app.apply_identity();
         app.refresh();
+        app.open_repo_hunk_if_idle();
         app
     }
 
@@ -1892,17 +1893,27 @@ impl App {
             self.selected = Some(index.min(self.rows.len() - 1));
             self.snap = true;
             self.follow_selection();
-            self.preview_hunks_if_idle();
         }
     }
 
-    /// If the preview is empty (or already a diff), show this row's hunks.
-    fn preview_hunks_if_idle(&mut self) {
+    /// Fill an empty preview with hunk for this repo. No letter keys.
+    fn open_repo_hunk_if_idle(&mut self) {
         let Some(pane_id) = self.pane_ctl.as_ref().map(|c| c.pane_id.clone()) else {
             return;
         };
-        if herdr_sidebar::viewer::preview_follows_diff(&pane_id) {
-            self.open_selected_diff();
+        if !herdr_sidebar::viewer::preview_follows_diff(&pane_id) {
+            return;
+        }
+        let Some(repo) = self.active_repo() else {
+            return;
+        };
+        if herdr_sidebar::viewer::hunk_bin().is_none() {
+            return;
+        }
+        let root = repo.git.root();
+        let payload = herdr_sidebar::viewer::hunk_diff_payload(root, false);
+        if let Err(e) = herdr_sidebar::viewer::open_in_pane(&pane_id, root, &payload) {
+            self.flash = Some((e, true));
         }
     }
 

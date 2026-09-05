@@ -1,3 +1,7 @@
+0.32.0
+
+  Open hunk from prefix
+
 0.31.0
 
   Open diffs in hunk

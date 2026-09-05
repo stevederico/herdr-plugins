@@ -19,7 +19,7 @@
 
 id = "herdr-sidebar"
 name = "herdr-sidebar"
-version = "0.31.0"
+version = "0.32.0"
 description = "VS Code-style sidebar: file explorer + source control (with ✧ AI commit messages) in one herdr pane."
 min_herdr_version = "0.7.0"
 platforms = ["linux", "macos", "windows"]
@@ -78,6 +78,20 @@ command = [
   "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
   '''$u=New-Object System.Text.UTF8Encoding($false); [Console]::OutputEncoding=$u; $OutputEncoding=$u; $b=$env:HERDR_BIN_PATH; if(-not $b){$b='herdr'}; $p=((& $b plugin list --json|ConvertFrom-Json).result.plugins|?{$_.plugin_id -eq 'herdr-sidebar'}).plugin_root; if($p -and $p.StartsWith('\\?\')){$p=$p.Substring(4)}; & (Join-Path (Join-Path $p 'scripts') 'open-git.ps1')''',
 ]
+
+[[actions]]
+id = "open-hunk"
+platforms = ["linux", "macos"]
+title = "Open Hunk"
+description = "Open hunk in this tab's preview pane."
+command = ["./target/release/herdr-sidebar", "--open-hunk"]
+
+[[actions]]
+id = "open-hunk-windows"
+platforms = ["windows"]
+title = "Open Hunk"
+description = "Open hunk in this tab's preview pane."
+command = ["./target/release/herdr-sidebar.exe", "--open-hunk"]
 
 # Refresh every workspace onto the latest builds after a rebuild.
 [[actions]]

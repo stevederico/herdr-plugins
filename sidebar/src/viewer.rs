@@ -1722,6 +1722,31 @@ pub fn open_file(path: &Path) -> Result<(), String> {
     open_in_pane(&sidebar, &cwd, &file_request(&path))
 }
 
+/// Agent/CLI entry: open hunk in this tab's preview (prefix action).
+pub fn open_hunk() -> Result<(), String> {
+    if hunk_bin().is_none() {
+        return Err("hunk not found — install from hunk.dev".into());
+    }
+    let json = ipc::call_text("pane.list", serde_json::json!({}))
+        .map_err(|e| format!("pane.list: {e}"))?;
+    let tab = crate::launch::caller_tab(&json);
+    if tab.is_empty() {
+        return Err("not inside a herdr tab".into());
+    }
+    let Some(sidebar) = crate::launch::sidebar_pane_in_tab(&json, &tab) else {
+        return Err("no sidebar in this tab".into());
+    };
+    let sibling = crate::launch::sibling_agent_cwd(&json, &sidebar);
+    let cwd = if sibling.is_empty() {
+        std::env::current_dir().map_err(|e| format!("cwd: {e}"))?
+    } else {
+        PathBuf::from(sibling)
+    };
+    let git = crate::git::Git::discover(&cwd)?;
+    let root = git.root().to_path_buf();
+    open_in_pane(&sidebar, &root, &hunk_diff_payload(&root, false))
+}
+
 /// True when the preview is empty or already a diff — SCM can fill it with
 /// hunks without stealing a file the user opened from the explorer.
 pub fn preview_follows_diff(my_pane_id: &str) -> bool {

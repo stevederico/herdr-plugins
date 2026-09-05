@@ -79,11 +79,18 @@ fn main() -> std::io::Result<()> {
             }
             return Ok(());
         }
+        Some("--open-hunk") => {
+            if let Err(e) = viewer::open_hunk() {
+                eprintln!("herdr-sidebar: {e}");
+                std::process::exit(1);
+            }
+            return Ok(());
+        }
         Some("--view") => {}
         Some(other) => {
             eprintln!("herdr-sidebar: unknown argument `{other}`");
             eprintln!(
-                "usage: herdr-sidebar [--view explorer|git|--preview <ctl>|--open-file <path>|--launch-decision [git]|--focused-pane|--open-plan|--focused-tab|--agent-cwd|--has-token <pane_id>]"
+                "usage: herdr-sidebar [--view explorer|git|--preview <ctl>|--open-file <path>|--open-hunk|--launch-decision [git]|--focused-pane|--open-plan|--focused-tab|--agent-cwd|--has-token <pane_id>]"
             );
             std::process::exit(2);
         }
