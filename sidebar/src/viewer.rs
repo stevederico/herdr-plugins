@@ -861,7 +861,7 @@ fn load_file(target: &Path) -> Doc {
                 numbered: true,
                 scroll: 0,
                 media: None,
-                md_render: false,
+                md_render: crate::md::is_markdown(target),
                 md_toggle: None,
                 sel: None,
                 sel_anchor: None,
@@ -2321,14 +2321,14 @@ mod tests {
     }
 
     #[test]
-    fn markdown_opens_editable() {
+    fn markdown_opens_rendered() {
         let path = std::env::temp_dir().join(format!("herdr-md-open-{}.md", std::process::id()));
         std::fs::write(&path, "# hi\n").unwrap();
         let doc = load(&Request::File(path.clone()));
         let _ = std::fs::remove_file(&path);
         assert!(doc.is_markdown());
-        assert!(!doc.md_render);
-        assert!(doc.editable());
+        assert!(doc.md_render);
+        assert!(!doc.editable());
     }
 
     #[test]
@@ -2337,7 +2337,7 @@ mod tests {
         std::fs::write(&path, "# hi\n").unwrap();
         let mut doc = load(&Request::File(path.clone()));
         let _ = std::fs::remove_file(&path);
-        doc.md_render = true;
+        assert!(doc.md_render);
         assert!(!doc.editable());
         doc.begin_raw_edit();
         doc.insert_char('q');
@@ -2358,7 +2358,7 @@ mod tests {
         std::fs::write(&path, "# a\n").unwrap();
         let req = Request::File(path.clone());
         let mut doc = load(&req);
-        assert!(!doc.md_render);
+        assert!(doc.md_render);
         doc.md_render = false;
         std::fs::write(&path, "# b\nhello\n").unwrap();
         reload_keeping_view(&mut doc, &req);

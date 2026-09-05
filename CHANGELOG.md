@@ -1,3 +1,7 @@
+0.28.0
+
+  Default markdown rendered
+
 0.27.0
 
   Move preview icon
