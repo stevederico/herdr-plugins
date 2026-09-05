@@ -31,13 +31,51 @@ fn assets() -> &'static (SyntaxSet, Theme) {
 /// Highlight `text` for a file called `name`, up to `max` lines. `None` when
 /// no grammar matches (caller falls back to plain lines).
 pub fn highlight(name: &str, text: &str, max: usize) -> Option<Vec<Line<'static>>> {
-    let (syntaxes, theme) = assets();
+    let (syntaxes, _) = assets();
     let ext = name.rsplit('.').next().unwrap_or("");
     let syntax = syntaxes
         .find_syntax_by_extension(ext)
         .or_else(|| syntaxes.find_syntax_by_extension(name))
-        .or_else(|| text.lines().next().and_then(|l| syntaxes.find_syntax_by_first_line(l)))?;
+        .or_else(|| {
+            text.lines()
+                .next()
+                .and_then(|l| syntaxes.find_syntax_by_first_line(l))
+        })?;
+    Some(highlight_inner(syntax, text, max))
+}
 
+/// Highlight fenced-code `text` using a language token (`rust`, `bash`, `ts`).
+/// `None` when no grammar matches.
+pub fn highlight_lang(lang: &str, text: &str, max: usize) -> Option<Vec<Line<'static>>> {
+    let lang = lang.trim();
+    if lang.is_empty() {
+        return None;
+    }
+    let lower = lang.to_ascii_lowercase();
+    let alias = match lower.as_str() {
+        "shell" | "console" | "sh" | "zsh" | "bash" => "bash",
+        "rs" => "rust",
+        "py" => "python",
+        "js" | "jsx" => "javascript",
+        "ts" => "typescript",
+        "yml" => "yaml",
+        "md" => "markdown",
+        other => other,
+    };
+    let (syntaxes, _) = assets();
+    let syntax = syntaxes
+        .find_syntax_by_token(alias)
+        .or_else(|| syntaxes.find_syntax_by_extension(alias))
+        .or_else(|| syntaxes.find_syntax_by_name(alias))?;
+    Some(highlight_inner(syntax, text, max))
+}
+
+fn highlight_inner(
+    syntax: &syntect::parsing::SyntaxReference,
+    text: &str,
+    max: usize,
+) -> Vec<Line<'static>> {
+    let (syntaxes, theme) = assets();
     let mut highlighter = HighlightLines::new(syntax, theme);
     let mut lines = Vec::new();
     for raw in LinesWithEndings::from(text).take(max) {
@@ -65,7 +103,7 @@ pub fn highlight(name: &str, text: &str, max: usize) -> Option<Vec<Line<'static>
             .collect();
         lines.push(Line::from(spans));
     }
-    Some(lines)
+    lines
 }
 
 /// Stateful per-line highlighter (for diff rendering, where old/new file
@@ -81,7 +119,9 @@ impl LineHighlighter {
         let syntax = syntaxes
             .find_syntax_by_extension(ext)
             .or_else(|| syntaxes.find_syntax_by_extension(name));
-        Self { inner: syntax.map(|s| HighlightLines::new(s, theme)) }
+        Self {
+            inner: syntax.map(|s| HighlightLines::new(s, theme)),
+        }
     }
 
     /// Highlight one line (no trailing newline in, none out).
@@ -134,15 +174,38 @@ mod tests {
 
     #[test]
     fn extended_grammars_cover_typescript_and_toml() {
-        assert!(highlight("app.ts", "const x: string = \"hi\";
-", 10).is_some());
-        assert!(highlight("Cargo.toml", "[package]
+        assert!(
+            highlight(
+                "app.ts",
+                "const x: string = \"hi\";
+",
+                10
+            )
+            .is_some()
+        );
+        assert!(
+            highlight(
+                "Cargo.toml",
+                "[package]
 name = \"x\"
-", 10).is_some());
+",
+                10
+            )
+            .is_some()
+        );
     }
 
     #[test]
     fn unknown_extensions_fall_back_to_none() {
         assert!(highlight("data.qqzz", "gibberish content\n", 10).is_none());
+    }
+
+    #[test]
+    fn language_tokens_highlight_fences() {
+        assert!(highlight_lang("rust", "fn main() {}\n", 10).is_some());
+        assert!(highlight_lang("bash", "echo hi\n", 10).is_some());
+        assert!(highlight_lang("rs", "let x = 1;\n", 10).is_some());
+        assert!(highlight_lang("", "x", 10).is_none());
+        assert!(highlight_lang("not-a-lang-xyz", "x", 10).is_none());
     }
 }

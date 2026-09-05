@@ -1,3 +1,7 @@
+0.26.0
+
+  Render markdown properly
+
 0.25.0
 
   Wrap markdown preview

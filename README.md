@@ -54,7 +54,7 @@ Steve's local [herdr](https://herdr.dev) plugins in one repo. `herdr-sidebar` is
 ### 👁️ **File Preview**
 - **Opens on the far right** (explorer | agent | preview). One viewer per tab; clicks reuse it
 - **Live-reloads from disk** when an agent (or anything else) writes the open file. Markdown included. ~80ms
-- **Markdown** opens as an editor. Lines wrap to the pane. Click the chip for Rendered (headings, lists, fences, task boxes). Type in Rendered to drop back into Raw. Click a box to toggle tasks
+- **Markdown** opens as an editor. Lines wrap to the pane. Click the chip for Rendered (headings, lists, tables, HTML, fences, task boxes). Type in Rendered to drop back into Raw. Click a box to toggle tasks
 - **Edit**: type, Ctrl+S to save, Ctrl+A / Ctrl+C to copy
 - **Images and video** rasterize in the pane. `o` opens the real file at full resolution
 - **Full-size preview** (default on): other panes park while you read; Esc restores them
@@ -77,7 +77,7 @@ Steve's local [herdr](https://herdr.dev) plugins in one repo. `herdr-sidebar` is
 
 | Dir | Plugin id | What |
 |-----|-----------|------|
-| `sidebar/` | `herdr-sidebar` | Explorer + SCM + preview (0.25.0) |
+| `sidebar/` | `herdr-sidebar` | Explorer + SCM + preview (0.26.0) |
 | `git-badge/` | `herdr-git-badge` | Folder `*` when dirty or unpushed |
 | `space-status/` | `herdr-space-status` | 🔨 working, ✅ done, ⚠️ blocked, ⚪ idle |
 | `space-title/` | `herdr-space-title` | Rename spaces from session titles |

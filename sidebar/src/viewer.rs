@@ -174,11 +174,19 @@ impl Doc {
         self.unwrapped_count()
     }
 
+    fn markdown(&self) -> crate::md::Rendered {
+        let Some(buf) = &self.buffer else {
+            return crate::md::Rendered {
+                lines: Vec::new(),
+                tasks: Vec::new(),
+            };
+        };
+        crate::md::render_at(&buf.join("\n"), self.wrap_width.max(1))
+    }
+
     fn unwrapped_count(&self) -> usize {
         if self.md_render {
-            if let Some(buf) = &self.buffer {
-                return crate::md::render(&buf.join("\n")).len().max(1);
-            }
+            return self.markdown().lines.len().max(1);
         }
         if let Some(buf) = &self.buffer {
             buf.len().max(1)
@@ -190,13 +198,13 @@ impl Doc {
     fn wrapped_count(&self) -> usize {
         let w = self.wrap_width.max(1);
         if self.md_render {
-            if let Some(buf) = &self.buffer {
-                return crate::md::render(&buf.join("\n"))
-                    .iter()
-                    .map(|l| wrap_line(l, w).len().max(1))
-                    .sum::<usize>()
-                    .max(1);
-            }
+            return self
+                .markdown()
+                .lines
+                .iter()
+                .map(|l| wrap_line(l, w).len().max(1))
+                .sum::<usize>()
+                .max(1);
         }
         if let Some(buf) = &self.buffer {
             return buf
@@ -547,14 +555,18 @@ impl Doc {
         }
         let Some(buf) = &self.buffer else { return };
         let src = buf.join("\n");
-        let rendered = crate::md::render_full(&src);
+        let rendered = crate::md::render_at(&src, self.wrap_width.max(1));
         let w = self.wrap_width.max(1);
         let mut vis = 0;
         let mut hit_src = None;
         for (i, line) in rendered.lines.iter().enumerate() {
             let n = wrap_line(line, w).len().max(1);
             if rendered_row >= vis && rendered_row < vis + n {
-                hit_src = rendered.tasks.iter().find(|t| t.row == i).map(|t| t.src_line);
+                hit_src = rendered
+                    .tasks
+                    .iter()
+                    .find(|t| t.row == i)
+                    .map(|t| t.src_line);
                 break;
             }
             vis += n;
@@ -563,8 +575,12 @@ impl Doc {
             return;
         };
         let Some(buf) = &mut self.buffer else { return };
-        let Some(line) = buf.get(src_line) else { return };
-        let Some(next) = crate::md::toggle_task_line(line) else { return };
+        let Some(line) = buf.get(src_line) else {
+            return;
+        };
+        let Some(next) = crate::md::toggle_task_line(line) else {
+            return;
+        };
         buf[src_line] = next;
         self.dirty = true;
         self.save();
@@ -591,8 +607,8 @@ impl Doc {
 
     fn plain_lines(&self) -> Vec<String> {
         if self.md_render {
-            if let Some(buf) = &self.buffer {
-                return crate::md::render(&buf.join("\n")).iter().map(line_plain).collect();
+            if self.buffer.is_some() {
+                return self.markdown().lines.iter().map(line_plain).collect();
             }
         }
         if let Some(buf) = &self.buffer {
@@ -602,7 +618,8 @@ impl Doc {
     }
 
     fn line_selected(&self, n: usize) -> bool {
-        self.sel.is_some_and(|(a, b)| n >= a.min(b) && n <= a.max(b))
+        self.sel
+            .is_some_and(|(a, b)| n >= a.min(b) && n <= a.max(b))
     }
 
     fn row_at_mouse(&self, mouse_row: u16) -> usize {
@@ -644,6 +661,22 @@ fn with_sel_bg(line: Line<'static>, on: bool) -> Line<'static> {
     }
 }
 
+fn fill_line_bg(mut line: Line<'static>, width: usize) -> Line<'static> {
+    let bg = line
+        .style
+        .bg
+        .or_else(|| line.spans.iter().find_map(|s| s.style.bg));
+    let Some(bg) = bg else {
+        return line;
+    };
+    let pad = width.saturating_sub(line.width());
+    if pad > 0 {
+        line.spans
+            .push(Span::styled(" ".repeat(pad), Style::default().bg(bg)));
+    }
+    line
+}
+
 fn load(request: &Request) -> Doc {
     match request {
         Request::File(path) if crate::media::is_media(path) => load_media(path),
@@ -667,7 +700,11 @@ fn load_media(target: &Path) -> Doc {
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| target.display().to_string());
-    let kind = if crate::media::is_video(target) { "video" } else { "image" };
+    let kind = if crate::media::is_video(target) {
+        "video"
+    } else {
+        "image"
+    };
     Doc {
         name,
         context: format!("{kind} — {}", target.display()),
@@ -710,7 +747,10 @@ fn load_show(root: &Path, spec: &str, path: Option<&str>) -> Doc {
         args.push("--".into());
         args.push(p.replace('/', std::path::MAIN_SEPARATOR_STR));
     }
-    let output = std::process::Command::new("git").args(&args).current_dir(root).output();
+    let output = std::process::Command::new("git")
+        .args(&args)
+        .current_dir(root)
+        .output();
     let lines = match output {
         Err(e) => vec![Line::raw(format!("(git failed: {e})"))],
         Ok(out) => {
@@ -791,15 +831,16 @@ fn load_file(target: &Path) -> Doc {
                     media: None,
                     md_render: false,
                     md_toggle: None,
-            sel: None,
-            sel_anchor: None,
-            wrap_width: 0,
+                    sel: None,
+                    sel_anchor: None,
+                    wrap_width: 0,
                 };
             }
             let truncated = bytes.len() > MAX_BYTES;
             let text = String::from_utf8_lossy(&bytes[..bytes.len().min(MAX_BYTES)]);
             // Cap edit buffer size so the pane stays responsive.
-            let mut buffer: Vec<String> = text.lines().take(MAX_LINES).map(str::to_string).collect();
+            let mut buffer: Vec<String> =
+                text.lines().take(MAX_LINES).map(str::to_string).collect();
             if buffer.is_empty() {
                 buffer.push(String::new());
             }
@@ -822,9 +863,9 @@ fn load_file(target: &Path) -> Doc {
                 media: None,
                 md_render: false,
                 md_toggle: None,
-            sel: None,
-            sel_anchor: None,
-            wrap_width: 0,
+                sel: None,
+                sel_anchor: None,
+                wrap_width: 0,
             }
         }
     }
@@ -841,7 +882,11 @@ fn load_diff(root: &Path, rel: &str, kind: &str) -> Doc {
         // renders it as one big addition, like VS Code does.
         "untracked" => {
             args.push("--no-index".into());
-            args.push(if cfg!(windows) { "NUL".into() } else { "/dev/null".into() });
+            args.push(if cfg!(windows) {
+                "NUL".into()
+            } else {
+                "/dev/null".into()
+            });
         }
         _ => {}
     }
@@ -897,7 +942,10 @@ fn load_diff(root: &Path, rel: &str, kind: &str) -> Doc {
 
 fn read_control(control: &Path) -> Option<Request> {
     let mut buf = String::new();
-    std::fs::File::open(control).ok()?.read_to_string(&mut buf).ok()?;
+    std::fs::File::open(control)
+        .ok()?
+        .read_to_string(&mut buf)
+        .ok()?;
     parse_request(&buf)
 }
 
@@ -988,7 +1036,9 @@ fn follow_source(
 /// Tag our pane (heartbeat-stamped, see launch::HEARTBEAT_STALE_SECS) and
 /// title it with the shown document's name.
 fn report_identity(doc_name: &str) {
-    let Ok(pane_id) = std::env::var("HERDR_PANE_ID") else { return };
+    let Ok(pane_id) = std::env::var("HERDR_PANE_ID") else {
+        return;
+    };
     if pane_id.is_empty() {
         return;
     }
@@ -1027,7 +1077,9 @@ fn close_own_pane(control: &Path) {
 /// name (`herdr-sidebar-preview-<id with ':' as '_'>.ctl`).
 fn owner_pane_id(control: &Path) -> Option<String> {
     let stem = control.file_stem()?.to_str()?;
-    let id = stem.strip_prefix("herdr-sidebar-preview-")?.replace('_', ":");
+    let id = stem
+        .strip_prefix("herdr-sidebar-preview-")?
+        .replace('_', ":");
     (!id.is_empty()).then_some(id)
 }
 
@@ -1150,7 +1202,8 @@ pub fn run(control: &Path) -> std::io::Result<()> {
                         }
                         KeyCode::End if doc.editable() => {
                             if let Some(buf) = &doc.buffer {
-                                doc.cursor_col = buf.get(doc.cursor_row).map(|l| l.len()).unwrap_or(0);
+                                doc.cursor_col =
+                                    buf.get(doc.cursor_row).map(|l| l.len()).unwrap_or(0);
                             }
                         }
                         KeyCode::Home => doc.scroll = 0,
@@ -1317,7 +1370,12 @@ fn draw_doc(frame: &mut Frame, doc: &mut Doc, theme: IconTheme) -> usize {
         let tail: String = doc
             .context
             .chars()
-            .skip(doc.context.chars().count().saturating_sub(avail.saturating_sub(1)))
+            .skip(
+                doc.context
+                    .chars()
+                    .count()
+                    .saturating_sub(avail.saturating_sub(1)),
+            )
             .collect();
         format!("…{tail}")
     } else {
@@ -1338,10 +1396,7 @@ fn draw_doc(frame: &mut Frame, doc: &mut Doc, theme: IconTheme) -> usize {
         spans.push(Span::raw("  "));
         spans.push(Span::styled(
             chip,
-            Style::default()
-                .bold()
-                .fg(Color::LightBlue)
-                .bg(KEYCAP_BG),
+            Style::default().bold().fg(Color::LightBlue).bg(KEYCAP_BG),
         ));
     } else {
         spans.push(Span::styled(format!("  {shown}"), Style::default().dim()));
@@ -1369,22 +1424,19 @@ fn draw_doc(frame: &mut Frame, doc: &mut Doc, theme: IconTheme) -> usize {
         }
         if let Some(img) = &media.image {
             draw_cell_image(frame, body, img);
-            frame.render_widget(
-                Paragraph::new(Line::from(" esc close".dim())),
-                footer,
-            );
+            frame.render_widget(Paragraph::new(Line::from(" esc close".dim())), footer);
             return usize::from(body.height).max(1);
         }
     }
 
     let number_width = doc.unwrapped_count().to_string().len();
     let text: Vec<Line> = if doc.md_render {
-        if let Some(buf) = &doc.buffer {
+        if doc.buffer.is_some() {
             let w = doc.wrap_width.max(1);
             let mut visual = Vec::new();
-            for (n, line) in crate::md::render(&buf.join("\n")).into_iter().enumerate() {
+            for (n, line) in doc.markdown().lines.into_iter().enumerate() {
                 for wrapped in wrap_line(&line, w) {
-                    visual.push((n, wrapped));
+                    visual.push((n, fill_line_bg(wrapped, w)));
                 }
             }
             visual
@@ -1484,11 +1536,7 @@ fn draw_doc(frame: &mut Frame, doc: &mut Doc, theme: IconTheme) -> usize {
 
     let hint = if doc.editable() {
         let status = if doc.notice.is_empty() {
-            if doc.dirty {
-                "modified"
-            } else {
-                "edit"
-            }
+            if doc.dirty { "modified" } else { "edit" }
         } else {
             doc.notice.as_str()
         };
@@ -1725,7 +1773,9 @@ fn spawn_command_pane(
     // Far-right preview: explorer | grok | preview. Split the rightmost
     // pane (not our immediate neighbor — that sandwiched preview between
     // the tree and the agent).
-    let rightmost = layout.as_deref().and_then(|json| rightmost_pane(json, my_pane_id));
+    let rightmost = layout
+        .as_deref()
+        .and_then(|json| rightmost_pane(json, my_pane_id));
     // Splitting ourselves (no other panes — e.g. everything else just parked,
     // leaving us momentarily full-width): keep the width the sidebar had
     // BEFORE the park, not a ballooned 30-50%.
@@ -1801,7 +1851,6 @@ fn spawn_viewer_pane(
     )
 }
 
-
 // ---------------------------------------------------------------------------
 // Full-size mode: park the tab's other panes while a preview is open.
 // ---------------------------------------------------------------------------
@@ -1809,8 +1858,10 @@ fn spawn_viewer_pane(
 /// Park plan for `owner`'s tab, recorded beside the control file so either
 /// process (sidebar or viewer) can restore.
 fn park_path(owner: &str) -> PathBuf {
-    std::env::temp_dir()
-        .join(format!("herdr-sidebar-preview-{}.park.json", owner.replace(':', "_")))
+    std::env::temp_dir().join(format!(
+        "herdr-sidebar-preview-{}.park.json",
+        owner.replace(':', "_")
+    ))
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug)]
@@ -1870,8 +1921,7 @@ fn our_panes_in_tab(pane_list_json: &str, owner: &str) -> Vec<String> {
         #[serde(default)]
         tokens: serde_json::Map<String, serde_json::Value>,
     }
-    let Ok(msg) = serde_json::from_str::<Msg>(pane_list_json.trim_start_matches('\u{feff}'))
-    else {
+    let Ok(msg) = serde_json::from_str::<Msg>(pane_list_json.trim_start_matches('\u{feff}')) else {
         return vec![owner.to_string()];
     };
     let tab = msg
@@ -1903,17 +1953,20 @@ fn park_others(owner: &str) {
     if park_path(owner).exists() {
         return;
     }
-    let Ok(list) = ipc::call_text("pane.list", serde_json::json!({})) else { return };
+    let Ok(list) = ipc::call_text("pane.list", serde_json::json!({})) else {
+        return;
+    };
     let ours = our_panes_in_tab(&list, owner);
     let tab = crate::launch::tab_of(&list, owner);
     if tab.is_empty() {
         return;
     }
-    let Ok(layout) = ipc::call_text("pane.layout", serde_json::json!({ "pane_id": owner }))
-    else {
+    let Ok(layout) = ipc::call_text("pane.layout", serde_json::json!({ "pane_id": owner })) else {
         return;
     };
-    let Ok(msg) = serde_json::from_str::<LayoutMsg2>(&layout) else { return };
+    let Ok(msg) = serde_json::from_str::<LayoutMsg2>(&layout) else {
+        return;
+    };
     let body = msg.result.layout;
     let owner_ratio = body
         .panes
@@ -1957,7 +2010,11 @@ fn park_others(owner: &str) {
             }
         }
     }
-    let plan = ParkPlan { tab, owner_ratio, panes: others };
+    let plan = ParkPlan {
+        tab,
+        owner_ratio,
+        panes: others,
+    };
     if let Ok(json) = serde_json::to_string(&plan) {
         let _ = std::fs::write(park_path(owner), json);
     }
@@ -1968,9 +2025,13 @@ fn park_others(owner: &str) {
 /// proportions). Returns whether a plan existed.
 pub fn restore_parked(owner: &str) -> bool {
     let path = park_path(owner);
-    let Ok(json) = std::fs::read_to_string(&path) else { return false };
+    let Ok(json) = std::fs::read_to_string(&path) else {
+        return false;
+    };
     let _ = std::fs::remove_file(&path);
-    let Ok(plan) = serde_json::from_str::<ParkPlan>(&json) else { return false };
+    let Ok(plan) = serde_json::from_str::<ParkPlan>(&json) else {
+        return false;
+    };
 
     let viewer = ipc::call_text("pane.list", serde_json::json!({}))
         .ok()
@@ -2033,9 +2094,14 @@ fn build_tree(panes: &[(String, RectJ)]) -> Node {
         if cut <= min_x || cut >= max_x {
             continue;
         }
-        if panes.iter().all(|(_, q)| q.x + q.width <= cut || q.x >= cut) {
-            let (a, b): (Vec<_>, Vec<_>) =
-                panes.iter().cloned().partition(|(_, q)| q.x + q.width <= cut);
+        if panes
+            .iter()
+            .all(|(_, q)| q.x + q.width <= cut || q.x >= cut)
+        {
+            let (a, b): (Vec<_>, Vec<_>) = panes
+                .iter()
+                .cloned()
+                .partition(|(_, q)| q.x + q.width <= cut);
             if !a.is_empty() && !b.is_empty() {
                 return Node::Split {
                     dir: "right",
@@ -2051,9 +2117,14 @@ fn build_tree(panes: &[(String, RectJ)]) -> Node {
         if cut <= min_y || cut >= max_y {
             continue;
         }
-        if panes.iter().all(|(_, q)| q.y + q.height <= cut || q.y >= cut) {
-            let (a, b): (Vec<_>, Vec<_>) =
-                panes.iter().cloned().partition(|(_, q)| q.y + q.height <= cut);
+        if panes
+            .iter()
+            .all(|(_, q)| q.y + q.height <= cut || q.y >= cut)
+        {
+            let (a, b): (Vec<_>, Vec<_>) = panes
+                .iter()
+                .cloned()
+                .partition(|(_, q)| q.y + q.height <= cut);
             if !a.is_empty() && !b.is_empty() {
                 return Node::Split {
                     dir: "down",
@@ -2078,7 +2149,15 @@ fn build_tree(panes: &[(String, RectJ)]) -> Node {
 /// by rep(first); moving rep(second) in with the recorded direction/ratio
 /// carves the region correctly before either side's inner splits run.
 fn replay(tab: &str, node: &Node) {
-    let Node::Split { dir, ratio, first, second } = node else { return };
+    let Node::Split {
+        dir,
+        ratio,
+        first,
+        second,
+    } = node
+    else {
+        return;
+    };
     move_into(tab, rep(second), rep(first), dir, *ratio);
     replay(tab, first);
     replay(tab, second);
@@ -2160,7 +2239,10 @@ mod tests {
     #[test]
     fn requests_roundtrip() {
         let f = file_request(Path::new("C:/x/y.rs"));
-        assert_eq!(parse_request(&f), Some(Request::File(PathBuf::from("C:/x/y.rs"))));
+        assert_eq!(
+            parse_request(&f),
+            Some(Request::File(PathBuf::from("C:/x/y.rs")))
+        );
         let s = show_request(Path::new("C:/repo"), "stash@{1}", None);
         assert_eq!(
             parse_request(&s),
@@ -2231,7 +2313,8 @@ mod tests {
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(&ctl);
         assert!(
-            buf.as_ref().is_some_and(|b| b.iter().any(|l| l.contains("new from agent"))),
+            buf.as_ref()
+                .is_some_and(|b| b.iter().any(|l| l.contains("new from agent"))),
             "{buf:?}"
         );
     }
@@ -2260,7 +2343,9 @@ mod tests {
         assert!(doc.editable());
         assert!(!doc.md_render);
         assert!(
-            doc.buffer.as_ref().is_some_and(|b| b.iter().any(|l| l.contains('q'))),
+            doc.buffer
+                .as_ref()
+                .is_some_and(|b| b.iter().any(|l| l.contains('q'))),
             "{:?}",
             doc.buffer
         );
@@ -2297,7 +2382,10 @@ mod tests {
             ]}}}}"#,
             now - 2
         );
-        assert_eq!(viewer_pane_in_tab(&json, "w1:p1"), Some(("w1:p2".into(), false)));
+        assert_eq!(
+            viewer_pane_in_tab(&json, "w1:p1"),
+            Some(("w1:p2".into(), false))
+        );
         let stale = format!(
             r#"{{"result":{{"panes":[
                 {{"pane_id":"w1:p1","tab_id":"w1:t1"}},
@@ -2305,7 +2393,10 @@ mod tests {
             ]}}}}"#,
             now - 999
         );
-        assert_eq!(viewer_pane_in_tab(&stale, "w1:p1"), Some(("w1:p2".into(), true)));
+        assert_eq!(
+            viewer_pane_in_tab(&stale, "w1:p1"),
+            Some(("w1:p2".into(), true))
+        );
     }
 
     #[test]
@@ -2317,6 +2408,9 @@ mod tests {
         ]}}}"#;
         assert_eq!(rightmost_pane(json, "w1:p1").as_deref(), Some("w1:p3"));
         assert_eq!(rightmost_pane(json, "w1:p3").as_deref(), Some("w1:p2"));
-        assert_eq!(rightmost_pane(r#"{"result":{"layout":{"panes":[]}}}"#, "w1:p1"), None);
+        assert_eq!(
+            rightmost_pane(r#"{"result":{"layout":{"panes":[]}}}"#, "w1:p1"),
+            None
+        );
     }
 }
