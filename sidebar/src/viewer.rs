@@ -1361,8 +1361,9 @@ fn draw_doc(frame: &mut Frame, doc: &mut Doc, theme: IconTheme) -> usize {
     let dirty_mark = if doc.dirty { " ●" } else { "" };
     let left = vec![
         Span::styled(" ✕ ", Style::default().bold().fg(Color::LightBlue)),
-        Span::styled(format!("{} ", file_icon.glyph), icon_style),
-        Span::styled(format!("{}{dirty_mark}", doc.name), Style::default().bold()),
+        Span::styled(format!("{} ", doc.name), Style::default().bold()),
+        Span::styled(file_icon.glyph.to_string(), icon_style),
+        Span::styled(dirty_mark, Style::default().bold()),
     ];
     let used: usize = left.iter().map(Span::width).sum();
     let avail = usize::from(area.width).saturating_sub(used + 2);
