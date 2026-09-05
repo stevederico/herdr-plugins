@@ -1,3 +1,7 @@
+0.29.0
+
+  Sync cargo lock
+
 0.28.0
 
   Default markdown rendered
