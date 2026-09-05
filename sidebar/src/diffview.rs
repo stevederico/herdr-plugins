@@ -17,12 +17,14 @@ const ADD_BG: Color = Color::Rgb(0x20, 0x39, 0x28);
 const ADD_WORD_BG: Color = Color::Rgb(0x35, 0x59, 0x3d);
 const DEL_MARK: Color = Color::Rgb(0xd1, 0x6d, 0x76);
 const ADD_MARK: Color = Color::Rgb(0x8c, 0xc9, 0x8f);
+const HUNK_FG: Color = Color::Rgb(0x6a, 0x9f, 0xb5);
+const HUNK_BG: Color = Color::Rgb(0x1c, 0x24, 0x2d);
 
 /// One parsed diff line, before rendering.
 #[derive(Debug, PartialEq, Eq)]
 enum Ev {
-    /// A new hunk begins (rendered as a dim separator between hunks).
-    Hunk,
+    /// A hunk header (`@@ -a,b +c,d @@` plus optional function context).
+    Hunk(String),
     /// Unchanged: (old line no, new line no, text).
     Ctx(usize, usize, String),
     Del(usize, String),
@@ -35,7 +37,6 @@ fn parse_events(diff: &str) -> Vec<Ev> {
     let mut evs = Vec::new();
     let mut old_no = 0usize;
     let mut new_no = 0usize;
-    let mut seen_hunk = false;
     for line in diff.lines() {
         if line.starts_with("diff --git")
             || line.starts_with("index ")
@@ -67,10 +68,7 @@ fn parse_events(diff: &str) -> Vec<Ev> {
                     }
                 }
             }
-            if seen_hunk {
-                evs.push(Ev::Hunk);
-            }
-            seen_hunk = true;
+            evs.push(Ev::Hunk(line.to_string()));
             continue;
         }
         if let Some(t) = line.strip_prefix('-') {
@@ -218,10 +216,10 @@ pub fn render(rel: &str, diff: &str) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     for (idx, ev) in evs.iter().enumerate() {
         match ev {
-            Ev::Hunk => lines.push(Line::from(Span::styled(
-                format!("{}⋯", " ".repeat(w * 2 + 2)),
-                Style::default().dim(),
-            ))),
+            Ev::Hunk(text) => lines.push(
+                Line::from(Span::styled(text.clone(), Style::default().fg(HUNK_FG)))
+                    .style(Style::default().bg(HUNK_BG)),
+            ),
             Ev::Plain(t) => lines.push(Line::from(Span::styled(
                 t.clone(),
                 Style::default().dim(),
@@ -278,23 +276,25 @@ mod tests {
     #[test]
     fn diff_parses_gutters_tints_and_word_ranges() {
         let lines = render("app.ts", DIFF);
-        assert_eq!(lines.len(), 5);
+        assert_eq!(lines.len(), 6);
+        assert!(lines[0].to_string().contains("@@ -1,4 +1,5 @@"));
+        assert_eq!(lines[0].style.bg, Some(HUNK_BG));
         // Context row: both numbers, no tint.
-        assert!(lines[0].to_string().starts_with(" 1  1"));
-        assert_eq!(lines[0].style.bg, None);
+        assert!(lines[1].to_string().starts_with(" 1  1"));
+        assert_eq!(lines[1].style.bg, None);
         // Deletion: old number only, red row tint.
-        assert!(lines[1].to_string().contains('-'));
-        assert_eq!(lines[1].style.bg, Some(DEL_BG));
+        assert!(lines[2].to_string().contains('-'));
+        assert_eq!(lines[2].style.bg, Some(DEL_BG));
         // Addition: new number only, green row tint.
-        assert_eq!(lines[2].style.bg, Some(ADD_BG));
+        assert_eq!(lines[3].style.bg, Some(ADD_BG));
         // The paired del/add carry a darker word-level tint on the middle.
-        let word_tinted = lines[1]
+        let word_tinted = lines[2]
             .spans
             .iter()
             .any(|s| s.style.bg == Some(DEL_WORD_BG));
         assert!(word_tinted, "expected word-level tint on the deletion");
         // The unpaired trailing addition has no word tint.
-        let plain_add = lines[3]
+        let plain_add = lines[4]
             .spans
             .iter()
             .all(|s| s.style.bg != Some(ADD_WORD_BG));
@@ -303,10 +303,11 @@ mod tests {
 
     #[test]
     fn hunk_boundaries_and_binary_lines_survive() {
-        let two_hunks = "@@ -1,1 +1,1 @@\n ctx\n@@ -9,1 +9,1 @@\n ctx2\n";
+        let two_hunks = "@@ -1,1 +1,1 @@\n ctx\n@@ -9,1 +9,1 @@ fn foo\n ctx2\n";
         let lines = render("x.rs", two_hunks);
-        assert_eq!(lines.len(), 3);
-        assert!(lines[1].to_string().contains('⋯'));
+        assert_eq!(lines.len(), 4);
+        assert!(lines[0].to_string().contains("@@ -1,1 +1,1 @@"));
+        assert!(lines[2].to_string().contains("@@ -9,1 +9,1 @@ fn foo"));
         let bin = render("x.bin", "Binary files a/x.bin and b/x.bin differ\n");
         assert_eq!(bin.len(), 1);
     }

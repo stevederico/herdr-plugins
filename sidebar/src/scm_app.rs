@@ -1882,6 +1882,17 @@ impl App {
             self.selected = Some(index.min(self.rows.len() - 1));
             self.snap = true;
             self.follow_selection();
+            self.preview_hunks_if_idle();
+        }
+    }
+
+    /// If the preview is empty (or already a diff), show this row's hunks.
+    fn preview_hunks_if_idle(&mut self) {
+        let Some(pane_id) = self.pane_ctl.as_ref().map(|c| c.pane_id.clone()) else {
+            return;
+        };
+        if herdr_sidebar::viewer::preview_follows_diff(&pane_id) {
+            self.open_selected_diff();
         }
     }
 

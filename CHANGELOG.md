@@ -1,3 +1,7 @@
+0.30.0
+
+  Show diff hunks
+
 0.29.0
 
   Sync cargo lock

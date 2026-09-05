@@ -1619,6 +1619,21 @@ pub fn open_file(path: &Path) -> Result<(), String> {
     open_in_pane(&sidebar, &cwd, &file_request(&path))
 }
 
+/// True when the preview is empty or already a diff — SCM can fill it with
+/// hunks without stealing a file the user opened from the explorer.
+pub fn preview_follows_diff(my_pane_id: &str) -> bool {
+    let Ok(json) = ipc::call_text("pane.list", serde_json::json!({})) else {
+        return true;
+    };
+    match viewer_pane_in_tab(&json, my_pane_id) {
+        None | Some((_, true)) => true,
+        Some((_, false)) => matches!(
+            read_control(&control_path(my_pane_id)),
+            None | Some(Request::Diff { .. })
+        ),
+    }
+}
+
 /// Write `payload` to the caller's control file and make sure a live viewer
 /// pane exists on the far right of the tab. Errors are human-readable notices.
 pub fn open_in_pane(my_pane_id: &str, spawn_cwd: &Path, payload: &str) -> Result<(), String> {
@@ -2235,6 +2250,27 @@ mod tests {
         let plain: Vec<String> = rendered.iter().map(line_plain).collect();
         assert!(plain.iter().any(|l| l.contains("Hi")), "{plain:?}");
         assert!(plain.iter().any(|l| l.contains("hello")), "{plain:?}");
+    }
+
+    fn control_follows_diff(raw: &str) -> bool {
+        matches!(parse_request(raw), None | Some(Request::Diff { .. }))
+    }
+
+    #[test]
+    fn idle_or_diff_control_follows_hunks() {
+        assert!(control_follows_diff(""));
+        assert!(control_follows_diff("  "));
+        assert!(control_follows_diff(&diff_request(
+            Path::new("/r"),
+            "a.rs",
+            "worktree"
+        )));
+        assert!(!control_follows_diff(&file_request(Path::new("/r/a.rs"))));
+        assert!(!control_follows_diff(&show_request(
+            Path::new("/r"),
+            "HEAD",
+            None
+        )));
     }
 
     #[test]
