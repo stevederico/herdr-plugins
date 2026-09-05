@@ -1,3 +1,7 @@
+0.23.0
+
+  Star dirty folders
+
 0.22.0
 
   Add MIT license

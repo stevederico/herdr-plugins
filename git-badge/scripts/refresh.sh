@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Report $dirty=* when a workspace has uncommitted changes.
+# Report $dirty=* when a workspace has uncommitted changes or unpushed commits.
 set -euo pipefail
 herdr="${HERDR_BIN_PATH:-herdr}"
 source_id="herdr-git-badge"
@@ -25,11 +25,23 @@ def dirty(cwd: str) -> bool:
             ["git", "-C", cwd, "rev-parse", "--is-inside-work-tree"],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
-        out = subprocess.check_output(
+    except Exception:
+        return False
+    try:
+        porcelain = subprocess.check_output(
             ["git", "-C", cwd, "status", "--porcelain"],
             text=True, stderr=subprocess.DEVNULL,
         )
-        return bool(out.strip())
+        if porcelain.strip():
+            return True
+    except Exception:
+        return False
+    try:
+        ahead = subprocess.check_output(
+            ["git", "-C", cwd, "rev-list", "--count", "@{upstream}..HEAD"],
+            text=True, stderr=subprocess.DEVNULL,
+        )
+        return int(ahead.strip() or "0") > 0
     except Exception:
         return False
 
