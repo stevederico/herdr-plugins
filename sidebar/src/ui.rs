@@ -250,6 +250,88 @@ pub fn hits(rect: Rect, x: u16, y: u16) -> bool {
 
 /// Cut `s` down to at most `max` display columns, ending in `…` when trimmed.
 /// Empty when even the ellipsis wouldn't fit.
+/// Word-wrap `s` to `width` display columns. Returns byte ranges into `s`.
+/// One range even when `s` is empty. Breaks on spaces; overlong tokens hard-break.
+pub fn wrap_cols(s: &str, width: usize) -> Vec<(usize, usize)> {
+    let width = width.max(1);
+    if s.is_empty() {
+        return vec![(0, 0)];
+    }
+    let mut out = Vec::new();
+    let mut start = 0;
+    while start < s.len() {
+        let mut col = 0;
+        let mut end = start;
+        let mut last_space: Option<usize> = None;
+        for (off, c) in s[start..].char_indices() {
+            let i = start + off;
+            let cw = Span::raw(c.to_string()).width().max(1);
+            if col + cw > width && end > start {
+                break;
+            }
+            if c == ' ' {
+                last_space = Some(i);
+            }
+            col += cw;
+            end = i + c.len_utf8();
+        }
+        if end < s.len()
+            && let Some(sp) = last_space
+            && sp > start
+            && sp < end
+        {
+            end = sp;
+        }
+        if end == start {
+            let c = s[start..].chars().next();
+            end = start + c.map(char::len_utf8).unwrap_or(1);
+        }
+        out.push((start, end));
+        start = end;
+        if start < s.len() && s.as_bytes()[start] == b' ' {
+            start += 1;
+        }
+    }
+    if out.is_empty() {
+        out.push((0, 0));
+    }
+    out
+}
+
+/// Slice a styled line to the byte range `[start, end)` of its concatenated text.
+pub fn slice_line(line: &Line<'static>, start: usize, end: usize) -> Line<'static> {
+    if start >= end {
+        return Line::styled(String::new(), line.style);
+    }
+    let mut off = 0;
+    let mut spans = Vec::new();
+    for sp in &line.spans {
+        let len = sp.content.len();
+        let a = off.max(start);
+        let b = (off + len).min(end);
+        if a < b && a >= off && b <= off + len {
+            let rel_a = a - off;
+            let rel_b = b - off;
+            if rel_a < rel_b && rel_a <= sp.content.len() && rel_b <= sp.content.len() {
+                spans.push(Span::styled(sp.content[rel_a..rel_b].to_string(), sp.style));
+            }
+        }
+        off += len;
+    }
+    let mut out = Line::from(spans);
+    out.style = line.style;
+    out
+}
+
+/// Word-wrap one styled line to `width` columns.
+pub fn wrap_line(line: &Line<'static>, width: usize) -> Vec<Line<'static>> {
+    let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+    wrap_cols(&text, width)
+        .into_iter()
+        .map(|(a, b)| slice_line(line, a, b))
+        .collect()
+}
+
 /// Word-wrap a uniform-style footer message to the pane width: one leading
 /// space per line, `reserve` columns kept clear of the right edge (the «
 /// button zone). Unbreakable words longer than a line hard-break. Never
@@ -371,6 +453,19 @@ pub fn sibling_panes_of(pane_list_json: &str, my_pane_id: &str, other: View) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wrap_cols_breaks_on_spaces_and_hard_cuts() {
+        assert_eq!(wrap_cols("", 8), vec![(0, 0)]);
+        assert_eq!(wrap_cols("hi", 8), vec![(0, 2)]);
+        assert_eq!(wrap_cols("hello world", 8), vec![(0, 5), (6, 11)]);
+        assert_eq!(wrap_cols("abcdefghij", 4), vec![(0, 4), (4, 8), (8, 10)]);
+        let parts: Vec<&str> = wrap_cols("hello world", 8)
+            .into_iter()
+            .map(|(a, b)| &"hello world"[a..b])
+            .collect();
+        assert_eq!(parts, ["hello", "world"]);
+    }
 
     #[test]
     fn messages_wrap_to_narrow_panes() {

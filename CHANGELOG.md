@@ -1,3 +1,7 @@
+0.25.0
+
+  Wrap markdown preview
+
 0.24.0
 
   Show symlink folders

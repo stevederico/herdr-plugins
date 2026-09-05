@@ -27,6 +27,7 @@ use ratatui::widgets::Paragraph;
 use crate::ansi;
 use crate::icons::{IconTheme, icon};
 use crate::ipc;
+use crate::ui::{KEYCAP_BG, wrap_cols, wrap_line};
 
 /// Metadata source/token that marks the viewer pane, so the sidebar can find
 /// and reuse it (distinct from the sidebar's own identity tokens).
@@ -135,6 +136,8 @@ struct Doc {
     sel: Option<(usize, usize)>,
     /// Mouse-drag anchor row, if a selection is in progress.
     sel_anchor: Option<usize>,
+    /// Last body inner width used for wrapping. 0 = not drawn yet.
+    wrap_width: usize,
 }
 
 impl Doc {
@@ -156,6 +159,7 @@ impl Doc {
             md_toggle: None,
             sel: None,
             sel_anchor: None,
+            wrap_width: 0,
         }
     }
 
@@ -164,6 +168,13 @@ impl Doc {
     }
 
     fn line_count(&self) -> usize {
+        if self.wrap_width > 0 && self.buffer.is_some() {
+            return self.wrapped_count().max(1);
+        }
+        self.unwrapped_count()
+    }
+
+    fn unwrapped_count(&self) -> usize {
         if self.md_render {
             if let Some(buf) = &self.buffer {
                 return crate::md::render(&buf.join("\n")).len().max(1);
@@ -174,6 +185,125 @@ impl Doc {
         } else {
             self.lines.len().max(1)
         }
+    }
+
+    fn wrapped_count(&self) -> usize {
+        let w = self.wrap_width.max(1);
+        if self.md_render {
+            if let Some(buf) = &self.buffer {
+                return crate::md::render(&buf.join("\n"))
+                    .iter()
+                    .map(|l| wrap_line(l, w).len().max(1))
+                    .sum::<usize>()
+                    .max(1);
+            }
+        }
+        if let Some(buf) = &self.buffer {
+            return buf
+                .iter()
+                .map(|l| wrap_cols(l, w).len().max(1))
+                .sum::<usize>()
+                .max(1);
+        }
+        self.unwrapped_count()
+    }
+
+    fn visual_cursor(&self) -> usize {
+        let w = self.wrap_width.max(1);
+        let Some(buf) = &self.buffer else {
+            return self.cursor_row;
+        };
+        if self.md_render {
+            return self.scroll;
+        }
+        let mut vis = 0;
+        for (i, line) in buf.iter().enumerate() {
+            let ranges = wrap_cols(line, w);
+            if i == self.cursor_row {
+                let col = self.cursor_col.min(line.len());
+                for (ri, (a, b)) in ranges.iter().enumerate() {
+                    let last = ri + 1 == ranges.len();
+                    if col >= *a && (col < *b || (last && col <= *b)) {
+                        return vis + ri;
+                    }
+                }
+                return vis + ranges.len().saturating_sub(1);
+            }
+            vis += ranges.len().max(1);
+        }
+        vis
+    }
+
+    fn move_visual(&mut self, delta: isize) {
+        let w = self.wrap_width.max(1);
+        let Some(buf) = &self.buffer else { return };
+        let mut vis: Vec<(usize, usize, usize)> = Vec::new();
+        for (i, line) in buf.iter().enumerate() {
+            for (a, b) in wrap_cols(line, w) {
+                vis.push((i, a, b));
+            }
+        }
+        if vis.is_empty() {
+            return;
+        }
+        let cur = self.visual_cursor().min(vis.len() - 1);
+        let keep = {
+            let (_, a, _) = vis[cur];
+            buf.get(self.cursor_row)
+                .map(|l| {
+                    let end = self.cursor_col.min(l.len()).max(a);
+                    l.get(a..end).map(|s| s.chars().count()).unwrap_or(0)
+                })
+                .unwrap_or(0)
+        };
+        let next = (cur as isize + delta).clamp(0, vis.len() as isize - 1) as usize;
+        let (row, a, b) = vis[next];
+        self.cursor_row = row;
+        let seg = buf.get(row).and_then(|l| l.get(a..b)).unwrap_or("");
+        let mut col = a;
+        let mut n = 0;
+        for c in seg.chars() {
+            if n >= keep {
+                break;
+            }
+            col += c.len_utf8();
+            n += 1;
+        }
+        if n < keep {
+            col = b;
+        }
+        self.cursor_col = col;
+        self.clamp_cursor();
+    }
+
+    fn click_visual(&mut self, visual: usize, col_from_gutter: usize) {
+        let w = self.wrap_width.max(1);
+        let Some(buf) = &self.buffer else { return };
+        let mut vis: Vec<(usize, usize, usize)> = Vec::new();
+        for (i, line) in buf.iter().enumerate() {
+            for (a, b) in wrap_cols(line, w) {
+                vis.push((i, a, b));
+            }
+        }
+        let Some((row, a, b)) = vis.get(visual.min(vis.len().saturating_sub(1))) else {
+            return;
+        };
+        self.cursor_row = *row;
+        let seg = buf.get(*row).and_then(|l| l.get(*a..*b)).unwrap_or("");
+        let mut col = *a;
+        let mut n = 0;
+        for c in seg.chars() {
+            if n >= col_from_gutter {
+                break;
+            }
+            col += c.len_utf8();
+            n += 1;
+        }
+        if n < col_from_gutter {
+            col = *b;
+        }
+        self.cursor_col = col;
+        self.clamp_cursor();
     }
 
     fn editable(&self) -> bool {
@@ -205,10 +335,15 @@ impl Doc {
 
     fn ensure_visible(&mut self, page: usize) {
         let page = page.max(1);
-        if self.cursor_row < self.scroll {
-            self.scroll = self.cursor_row;
-        } else if self.cursor_row >= self.scroll + page {
-            self.scroll = self.cursor_row + 1 - page;
+        let row = if self.wrap_width > 0 && self.buffer.is_some() && !self.md_render {
+            self.visual_cursor()
+        } else {
+            self.cursor_row
+        };
+        if row < self.scroll {
+            self.scroll = row;
+        } else if row >= self.scroll + page {
+            self.scroll = row + 1 - page;
         }
     }
 
@@ -412,17 +547,25 @@ impl Doc {
         }
         let Some(buf) = &self.buffer else { return };
         let src = buf.join("\n");
-        let Some(hit) = crate::md::render_full(&src)
-            .tasks
-            .into_iter()
-            .find(|t| t.row == rendered_row)
-        else {
+        let rendered = crate::md::render_full(&src);
+        let w = self.wrap_width.max(1);
+        let mut vis = 0;
+        let mut hit_src = None;
+        for (i, line) in rendered.lines.iter().enumerate() {
+            let n = wrap_line(line, w).len().max(1);
+            if rendered_row >= vis && rendered_row < vis + n {
+                hit_src = rendered.tasks.iter().find(|t| t.row == i).map(|t| t.src_line);
+                break;
+            }
+            vis += n;
+        }
+        let Some(src_line) = hit_src else {
             return;
         };
         let Some(buf) = &mut self.buffer else { return };
-        let Some(line) = buf.get(hit.src_line) else { return };
+        let Some(line) = buf.get(src_line) else { return };
         let Some(next) = crate::md::toggle_task_line(line) else { return };
-        buf[hit.src_line] = next;
+        buf[src_line] = next;
         self.dirty = true;
         self.save();
     }
@@ -546,6 +689,7 @@ fn load_media(target: &Path) -> Doc {
         md_toggle: None,
         sel: None,
         sel_anchor: None,
+        wrap_width: 0,
     }
 }
 
@@ -600,6 +744,7 @@ fn load_show(root: &Path, spec: &str, path: Option<&str>) -> Doc {
         md_toggle: None,
         sel: None,
         sel_anchor: None,
+        wrap_width: 0,
     }
 }
 
@@ -626,6 +771,7 @@ fn load_file(target: &Path) -> Doc {
             md_toggle: None,
             sel: None,
             sel_anchor: None,
+            wrap_width: 0,
         },
         Ok(bytes) => {
             let head = &bytes[..bytes.len().min(8192)];
@@ -647,6 +793,7 @@ fn load_file(target: &Path) -> Doc {
                     md_toggle: None,
             sel: None,
             sel_anchor: None,
+            wrap_width: 0,
                 };
             }
             let truncated = bytes.len() > MAX_BYTES;
@@ -677,6 +824,7 @@ fn load_file(target: &Path) -> Doc {
                 md_toggle: None,
             sel: None,
             sel_anchor: None,
+            wrap_width: 0,
             }
         }
     }
@@ -743,6 +891,7 @@ fn load_diff(root: &Path, rel: &str, kind: &str) -> Doc {
         md_toggle: None,
         sel: None,
         sel_anchor: None,
+        wrap_width: 0,
     }
 }
 
@@ -958,7 +1107,11 @@ pub fn run(control: &Path) -> std::io::Result<()> {
                         KeyCode::Char('y') if !doc.editable() => doc.copy_selection(),
                         KeyCode::Up => {
                             if doc.editable() {
-                                doc.move_up();
+                                if doc.wrap_width > 0 {
+                                    doc.move_visual(-1);
+                                } else {
+                                    doc.move_up();
+                                }
                                 doc.ensure_visible(page);
                             } else {
                                 doc.scroll = doc.scroll.saturating_sub(1);
@@ -966,7 +1119,11 @@ pub fn run(control: &Path) -> std::io::Result<()> {
                         }
                         KeyCode::Down => {
                             if doc.editable() {
-                                doc.move_down();
+                                if doc.wrap_width > 0 {
+                                    doc.move_visual(1);
+                                } else {
+                                    doc.move_down();
+                                }
                                 doc.ensure_visible(page);
                             } else {
                                 doc.scroll = (doc.scroll + 1).min(max);
@@ -1069,14 +1226,17 @@ pub fn run(control: &Path) -> std::io::Result<()> {
                         }
                     }
                     MouseEventKind::Down(MouseButton::Left) if doc.editable() && mouse.row >= 1 => {
-                        // Click to place cursor (row under header).
                         let row = usize::from(mouse.row.saturating_sub(1)) + doc.scroll;
                         if let Some(buf) = &doc.buffer {
-                            doc.cursor_row = row.min(buf.len().saturating_sub(1));
                             let number_width = buf.len().to_string().len() + 1;
                             let col = usize::from(mouse.column).saturating_sub(number_width);
-                            doc.cursor_col = col;
-                            doc.clamp_cursor();
+                            if doc.wrap_width > 0 {
+                                doc.click_visual(row, col);
+                            } else {
+                                doc.cursor_row = row.min(buf.len().saturating_sub(1));
+                                doc.cursor_col = col;
+                                doc.clamp_cursor();
+                            }
                         }
                         doc.sel_anchor = Some(doc.row_at_mouse(mouse.row));
                         doc.sel = None;
@@ -1125,6 +1285,16 @@ fn draw_doc(frame: &mut Frame, doc: &mut Doc, theme: IconTheme) -> usize {
     ])
     .areas(area);
 
+    if doc.buffer.is_some() {
+        let gutter = if doc.numbered && !doc.md_render {
+            doc.unwrapped_count().to_string().len() + 1
+        } else {
+            0
+        };
+        doc.wrap_width = usize::from(body.width).saturating_sub(gutter).max(1);
+    } else {
+        doc.wrap_width = 0;
+    }
     let total = doc.line_count();
     doc.scroll = doc
         .scroll
@@ -1171,7 +1341,7 @@ fn draw_doc(frame: &mut Frame, doc: &mut Doc, theme: IconTheme) -> usize {
             Style::default()
                 .bold()
                 .fg(Color::LightBlue)
-                .bg(crate::ui::KEYCAP_BG),
+                .bg(KEYCAP_BG),
         ));
     } else {
         spans.push(Span::styled(format!("  {shown}"), Style::default().dim()));
@@ -1207,29 +1377,48 @@ fn draw_doc(frame: &mut Frame, doc: &mut Doc, theme: IconTheme) -> usize {
         }
     }
 
-    let number_width = total.to_string().len();
+    let number_width = doc.unwrapped_count().to_string().len();
     let text: Vec<Line> = if doc.md_render {
         if let Some(buf) = &doc.buffer {
-            crate::md::render(&buf.join("\n"))
+            let w = doc.wrap_width.max(1);
+            let mut visual = Vec::new();
+            for (n, line) in crate::md::render(&buf.join("\n")).into_iter().enumerate() {
+                for wrapped in wrap_line(&line, w) {
+                    visual.push((n, wrapped));
+                }
+            }
+            visual
                 .into_iter()
                 .enumerate()
                 .skip(doc.scroll)
                 .take(usize::from(body.height))
-                .map(|(n, line)| with_sel_bg(line, doc.line_selected(n)))
+                .map(|(i, (_, line))| with_sel_bg(line, doc.line_selected(i)))
                 .collect()
         } else {
             Vec::new()
         }
     } else if let Some(buf) = &doc.buffer {
-        buf.iter()
+        let w = doc.wrap_width.max(1);
+        let mut visual = Vec::new();
+        for (n, line) in buf.iter().enumerate() {
+            for (k, (a, b)) in wrap_cols(line, w).into_iter().enumerate() {
+                visual.push((n, k == 0, line.get(a..b).unwrap_or("").to_string()));
+            }
+        }
+        visual
+            .into_iter()
             .enumerate()
             .skip(doc.scroll)
             .take(usize::from(body.height))
-            .map(|(n, line)| {
-                let mut spans =
-                    vec![Span::styled(format!("{:>number_width$} ", n + 1), Style::default().dim())];
-                spans.push(Span::raw(line.clone()));
-                with_sel_bg(Line::from(spans), doc.line_selected(n))
+            .map(|(i, (n, first, piece))| {
+                let gutter = if first {
+                    format!("{:>number_width$} ", n + 1)
+                } else {
+                    format!("{:>number_width$} ", "")
+                };
+                let mut spans = vec![Span::styled(gutter, Style::default().dim())];
+                spans.push(Span::raw(piece));
+                with_sel_bg(Line::from(spans), doc.line_selected(i))
             })
             .collect()
     } else {
@@ -1265,19 +1454,27 @@ fn draw_doc(frame: &mut Frame, doc: &mut Doc, theme: IconTheme) -> usize {
     // Place the hardware cursor on the edit position.
     if doc.editable() {
         doc.clamp_cursor();
-        if doc.cursor_row >= doc.scroll
-            && doc.cursor_row < doc.scroll + usize::from(body.height)
-        {
-            let y = body.y + (doc.cursor_row - doc.scroll) as u16;
-            let col_chars = doc
-                .buffer
-                .as_ref()
-                .and_then(|b| b.get(doc.cursor_row))
-                .map(|l| {
-                    let end = doc.cursor_col.min(l.len());
-                    l[..end].chars().count()
-                })
-                .unwrap_or(0);
+        let vis = doc.visual_cursor();
+        if vis >= doc.scroll && vis < doc.scroll + usize::from(body.height) {
+            let y = body.y + (vis - doc.scroll) as u16;
+            let col_chars = {
+                let w = doc.wrap_width.max(1);
+                doc.buffer
+                    .as_ref()
+                    .and_then(|b| b.get(doc.cursor_row))
+                    .map(|l| {
+                        let ranges = wrap_cols(l, w);
+                        let col = doc.cursor_col.min(l.len());
+                        let (a, _) = ranges
+                            .iter()
+                            .find(|(a, b)| col >= *a && (col < *b || col <= *b))
+                            .copied()
+                            .unwrap_or((0, 0));
+                        let end = col.max(a);
+                        l.get(a..end).map(|s| s.chars().count()).unwrap_or(0)
+                    })
+                    .unwrap_or(0)
+            };
             let x = body.x + (number_width as u16 + 1) + col_chars as u16;
             if x < body.x + body.width {
                 frame.set_cursor_position((x, y));
