@@ -1,3 +1,7 @@
+0.31.0
+
+  Open diffs in hunk
+
 0.30.0
 
   Show diff hunks

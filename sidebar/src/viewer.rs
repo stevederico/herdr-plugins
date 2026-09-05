@@ -68,6 +68,11 @@ enum Request {
         spec: String,
         path: Option<String>,
     },
+    /// Run [hunk](https://hunk.dev) in the preview pane (`args` after the binary).
+    Hunk {
+        root: PathBuf,
+        args: Vec<String>,
+    },
 }
 
 /// Control-file payload for a file preview.
@@ -84,6 +89,77 @@ pub fn diff_request(root: &Path, rel: &str, kind: &str) -> String {
 /// optionally narrowed to one file.
 pub fn show_request(root: &Path, spec: &str, path: Option<&str>) -> String {
     format!("show\t{}\t{spec}\t{}", root.display(), path.unwrap_or(""))
+}
+
+/// Control-file payload that opens [hunk](https://hunk.dev) in the preview pane.
+pub fn hunk_payload(root: &Path, args: &[&str]) -> String {
+    let mut out = format!("hunk\t{}", root.display());
+    for a in args {
+        out.push('\t');
+        out.push_str(a);
+    }
+    out
+}
+
+pub fn hunk_diff_payload(root: &Path, staged: bool) -> String {
+    if staged {
+        hunk_payload(root, &["diff", "--staged", "--watch"])
+    } else {
+        hunk_payload(root, &["diff", "--watch"])
+    }
+}
+
+pub fn hunk_show_payload(root: &Path, spec: &str, path: Option<&str>) -> String {
+    match path {
+        Some(p) if !p.is_empty() => hunk_payload(root, &["show", spec, "--watch", "--", p]),
+        _ => hunk_payload(root, &["show", spec, "--watch"]),
+    }
+}
+
+pub fn hunk_stash_payload(root: &Path, spec: &str) -> String {
+    hunk_payload(root, &["stash", "show", spec])
+}
+
+/// Path to the `hunk` binary, if installed.
+pub fn hunk_bin() -> Option<PathBuf> {
+    if let Ok(explicit) = std::env::var("HUNK_BIN") {
+        let p = PathBuf::from(explicit);
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+    if let Some(home) = std::env::var_os("HOME") {
+        let p = PathBuf::from(&home).join(".hunk/bin/hunk");
+        if p.is_file() {
+            return Some(p);
+        }
+        #[cfg(windows)]
+        {
+            let p = PathBuf::from(home).join(".hunk/bin/hunk.exe");
+            if p.is_file() {
+                return Some(p);
+            }
+        }
+    }
+    which_bin("hunk")
+}
+
+fn which_bin(name: &str) -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    for dir in std::env::split_paths(&path) {
+        let p = dir.join(name);
+        if p.is_file() {
+            return Some(p);
+        }
+        #[cfg(windows)]
+        {
+            let p = dir.join(format!("{name}.exe"));
+            if p.is_file() {
+                return Some(p);
+            }
+        }
+    }
+    None
 }
 
 fn parse_request(raw: &str) -> Option<Request> {
@@ -106,6 +182,14 @@ fn parse_request(raw: &str) -> Option<Request> {
             Some(Request::Show { root, spec, path })
         }
         Some("file") => Some(Request::File(PathBuf::from(parts.next()?))),
+        Some("hunk") => {
+            let root = PathBuf::from(parts.next()?);
+            let args: Vec<String> = parts.map(str::to_string).collect();
+            if args.is_empty() {
+                return None;
+            }
+            Some(Request::Hunk { root, args })
+        }
         // Legacy: a bare path.
         _ => Some(Request::File(PathBuf::from(raw))),
     }
@@ -692,6 +776,25 @@ fn load(request: &Request) -> Doc {
             crate::media::clear();
             load_show(root, spec, path.as_deref())
         }
+        Request::Hunk { .. } => Doc {
+            name: "hunk".into(),
+            context: String::new(),
+            lines: vec![Line::raw("(hunk is in this pane)")],
+            buffer: None,
+            path: None,
+            cursor_row: 0,
+            cursor_col: 0,
+            dirty: false,
+            notice: String::new(),
+            numbered: false,
+            scroll: 0,
+            media: None,
+            md_render: false,
+            md_toggle: None,
+            sel: None,
+            sel_anchor: None,
+            wrap_width: 0,
+        },
     }
 }
 
@@ -1629,16 +1732,49 @@ pub fn preview_follows_diff(my_pane_id: &str) -> bool {
         None | Some((_, true)) => true,
         Some((_, false)) => matches!(
             read_control(&control_path(my_pane_id)),
-            None | Some(Request::Diff { .. })
+            None | Some(Request::Diff { .. }) | Some(Request::Hunk { .. })
         ),
     }
+}
+
+/// Keep a hunk preview's heartbeat token fresh (hunk itself does not stamp it).
+pub fn touch_hunk_preview(my_pane_id: &str) {
+    let Ok(raw) = std::fs::read_to_string(control_path(my_pane_id)) else {
+        return;
+    };
+    if !raw.trim_start().starts_with("hunk\t") {
+        return;
+    }
+    let Ok(json) = ipc::call_text("pane.list", serde_json::json!({})) else {
+        return;
+    };
+    if let Some((id, _)) = viewer_pane_in_tab(&json, my_pane_id) {
+        stamp_preview_token(&id);
+    }
+}
+
+fn stamp_preview_token(pane_id: &str) {
+    let _ = ipc::call_text(
+        "pane.report_metadata",
+        serde_json::json!({
+            "pane_id": pane_id,
+            "source": METADATA_SOURCE,
+            "tokens": { METADATA_SOURCE: crate::state::unix_now().to_string() },
+        }),
+    );
 }
 
 /// Write `payload` to the caller's control file and make sure a live viewer
 /// pane exists on the far right of the tab. Errors are human-readable notices.
 pub fn open_in_pane(my_pane_id: &str, spawn_cwd: &Path, payload: &str) -> Result<(), String> {
     let control = control_path(my_pane_id);
-    std::fs::write(&control, payload).map_err(|e| format!("preview failed: {e}"))?;
+    let want_hunk = payload.starts_with("hunk\t");
+    if want_hunk && hunk_bin().is_none() {
+        return Err("hunk not found — install from hunk.dev".into());
+    }
+    let prev = std::fs::read_to_string(&control).unwrap_or_default();
+    let prev_hunk = prev.trim_start().starts_with("hunk\t");
+    let same = prev.trim() == payload.trim();
     let full = crate::state::load_state().preview_full;
     // Files are editable — focus the viewer so typing works. Diffs keep the tree focused.
     let focus_viewer = payload.starts_with("file\t");
@@ -1650,20 +1786,36 @@ pub fn open_in_pane(my_pane_id: &str, spawn_cwd: &Path, payload: &str) -> Result
     let mut pre_park_frac = owner_frac(my_pane_id);
 
     // A live viewer in this tab follows the control file by itself; a DEAD
-    // one (stale heartbeat) is closed and replaced.
+    // one (stale heartbeat) is closed and replaced. Hunk is a different
+    // process: same-payload reuse, otherwise close and spawn.
+    let mut reuse = false;
     if let Ok(json) = ipc::call_text("pane.list", serde_json::json!({})) {
         match viewer_pane_in_tab(&json, my_pane_id) {
             Some((id, false)) => {
-                if full {
-                    // Covers toggling the setting on while a preview is
-                    // already open beside the sidebar.
-                    park_others(my_pane_id);
-                    enforce_owner_width(my_pane_id, pre_park_frac.unwrap_or(0.3));
+                if same && want_hunk == prev_hunk {
+                    if want_hunk {
+                        stamp_preview_token(&id);
+                    }
+                    reuse = true;
+                    if full {
+                        park_others(my_pane_id);
+                        enforce_owner_width(my_pane_id, pre_park_frac.unwrap_or(0.3));
+                    }
+                    if focus_viewer {
+                        let _ = ipc::call_text("pane.focus", serde_json::json!({ "pane_id": id }));
+                    }
+                } else if want_hunk || prev_hunk {
+                    let _ = ipc::call_text("pane.close", serde_json::json!({ "pane_id": id }));
+                } else {
+                    reuse = true;
+                    if full {
+                        park_others(my_pane_id);
+                        enforce_owner_width(my_pane_id, pre_park_frac.unwrap_or(0.3));
+                    }
+                    if focus_viewer {
+                        let _ = ipc::call_text("pane.focus", serde_json::json!({ "pane_id": id }));
+                    }
                 }
-                if focus_viewer {
-                    let _ = ipc::call_text("pane.focus", serde_json::json!({ "pane_id": id }));
-                }
-                return Ok(());
             }
             Some((id, true)) => {
                 let _ = ipc::call_text("pane.close", serde_json::json!({ "pane_id": id }));
@@ -1677,10 +1829,21 @@ pub fn open_in_pane(my_pane_id: &str, spawn_cwd: &Path, payload: &str) -> Result
             }
         }
     }
+    std::fs::write(&control, payload).map_err(|e| format!("preview failed: {e}"))?;
+    if reuse {
+        return Ok(());
+    }
     if full {
         park_others(my_pane_id);
     }
-    spawn_viewer_pane(my_pane_id, spawn_cwd, &control, pre_park_frac, focus_viewer)?;
+    if want_hunk {
+        let Request::Hunk { root, args } = parse_request(payload).ok_or("bad hunk payload")? else {
+            return Err("bad hunk payload".into());
+        };
+        spawn_hunk_pane(my_pane_id, &root, &args, pre_park_frac, focus_viewer)?;
+    } else {
+        spawn_viewer_pane(my_pane_id, spawn_cwd, &control, pre_park_frac, focus_viewer)?;
+    }
     if full {
         enforce_owner_width(my_pane_id, pre_park_frac.unwrap_or(0.3));
     }
@@ -1865,6 +2028,62 @@ fn spawn_viewer_pane(
         pre_park_frac,
         focus_viewer,
     )
+}
+
+fn spawn_hunk_pane(
+    my_pane_id: &str,
+    root: &Path,
+    args: &[String],
+    pre_park_frac: Option<f64>,
+    focus_viewer: bool,
+) -> Result<(), String> {
+    let bin = hunk_bin().ok_or_else(|| "hunk not found — install from hunk.dev".to_string())?;
+    let command = hunk_shell_command(&bin, args);
+    spawn_command_pane(
+        my_pane_id,
+        root,
+        &command,
+        "Preview",
+        pre_park_frac,
+        focus_viewer,
+    )
+}
+
+fn hunk_shell_command(bin: &Path, args: &[String]) -> String {
+    let mut cmd = String::new();
+    #[cfg(windows)]
+    cmd.push_str("& ");
+    #[cfg(not(windows))]
+    cmd.push_str("exec ");
+    cmd.push_str(&shell_arg(&bin.display().to_string()));
+    for a in args {
+        cmd.push(' ');
+        cmd.push_str(&shell_arg(a));
+    }
+    cmd
+}
+
+fn shell_arg(a: &str) -> String {
+    #[cfg(windows)]
+    {
+        if a.chars()
+            .any(|c| matches!(c, ' ' | '"' | '&' | '|' | '%' | '\''))
+        {
+            format!("\"{}\"", a.replace('"', "\\\""))
+        } else {
+            a.to_string()
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        if a.chars()
+            .all(|c| c.is_ascii_alphanumeric() || "-_./@{}:~+".contains(c))
+        {
+            a.to_string()
+        } else {
+            format!("'{}'", a.replace('\'', "'\\''"))
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2253,7 +2472,10 @@ mod tests {
     }
 
     fn control_follows_diff(raw: &str) -> bool {
-        matches!(parse_request(raw), None | Some(Request::Diff { .. }))
+        matches!(
+            parse_request(raw),
+            None | Some(Request::Diff { .. }) | Some(Request::Hunk { .. })
+        )
     }
 
     #[test]
@@ -2265,6 +2487,7 @@ mod tests {
             "a.rs",
             "worktree"
         )));
+        assert!(control_follows_diff(&hunk_diff_payload(Path::new("/r"), false)));
         assert!(!control_follows_diff(&file_request(Path::new("/r/a.rs"))));
         assert!(!control_follows_diff(&show_request(
             Path::new("/r"),
@@ -2313,6 +2536,13 @@ mod tests {
             Some(Request::File(PathBuf::from("C:/plain.txt")))
         );
         assert_eq!(parse_request("  "), None);
+        assert_eq!(
+            parse_request(&hunk_diff_payload(Path::new("/repo"), true)),
+            Some(Request::Hunk {
+                root: PathBuf::from("/repo"),
+                args: vec!["diff".into(), "--staged".into(), "--watch".into()],
+            })
+        );
     }
 
     #[test]

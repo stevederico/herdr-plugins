@@ -63,7 +63,7 @@ Steve's local [herdr](https://herdr.dev) plugins in one repo. `herdr-sidebar` is
 - **Stage, unstage, commit, sync** with a VS Code-shaped diff (dual gutters, tinted rows)
 - **✧ suggest** writes a commit subject from the pending diff (`claude` CLI, filename fallback)
 - **Graph, commits, file history, branches, worktrees, remotes, stashes, tags**
-- **Live diffs** while you edit: the preview re-runs `git diff` on a short tick. j/k on a change fills an empty preview with that file's hunks
+- **Live diffs** in [hunk](https://hunk.dev) when it is installed (`hunk diff --watch`). j/k on a change fills an empty preview. Falls back to the built-in renderer without hunk
 
 ### 🧩 **Workspace helpers**
 - **git-badge** puts `*` next to the folder name when the worktree is dirty or unpushed
@@ -77,7 +77,7 @@ Steve's local [herdr](https://herdr.dev) plugins in one repo. `herdr-sidebar` is
 
 | Dir | Plugin id | What |
 |-----|-----------|------|
-| `sidebar/` | `herdr-sidebar` | Explorer + SCM + preview (0.30.0) |
+| `sidebar/` | `herdr-sidebar` | Explorer + SCM + preview (0.31.0) |
 | `git-badge/` | `herdr-git-badge` | Folder `*` when dirty or unpushed |
 | `space-status/` | `herdr-space-status` | 🔨 working, ✅ done, ⚠️ blocked, ⚪ idle |
 | `space-title/` | `herdr-space-title` | Rename spaces from session titles |
@@ -150,8 +150,8 @@ Disk wins: if the file changes on disk, the pane reloads even while you watch an
 | `a` / `u` | stage all / none |
 | `c` | commit message |
 | `A` | ✧ suggest message |
-| `j` `k` | move; show hunks if preview is empty |
-| `o` | open diff |
+| `j` `k` | move; open hunk if preview is empty |
+| `o` | open hunk (or built-in diff) |
 | `S` | sync |
 | `r` | refresh |
 

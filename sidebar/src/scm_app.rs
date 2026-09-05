@@ -670,6 +670,7 @@ impl App {
         self.last_beat = std::time::Instant::now();
         if let Some(ctl) = &self.pane_ctl {
             ctl.report_tokens(MY_VIEW, self.merged());
+            herdr_sidebar::viewer::touch_hunk_preview(&ctl.pane_id);
         }
     }
 
@@ -1739,35 +1740,44 @@ impl App {
         let path = (kind == Drawer::FileHistory)
             .then(|| self.history_target.clone())
             .flatten();
-        let payload =
-            herdr_sidebar::viewer::show_request(repo.git.root(), &spec, path.as_deref());
-        if let Err(e) =
-            herdr_sidebar::viewer::open_in_pane(&pane_id, repo.git.root(), &payload)
-        {
+        let root = repo.git.root();
+        let payload = if herdr_sidebar::viewer::hunk_bin().is_some() {
+            if kind == Drawer::Stashes {
+                herdr_sidebar::viewer::hunk_stash_payload(root, &spec)
+            } else {
+                herdr_sidebar::viewer::hunk_show_payload(root, &spec, path.as_deref())
+            }
+        } else {
+            herdr_sidebar::viewer::show_request(root, &spec, path.as_deref())
+        };
+        if let Err(e) = herdr_sidebar::viewer::open_in_pane(&pane_id, root, &payload) {
             self.flash = Some((e, true));
         }
     }
 
     /// Show a file's diff in the preview pane beside the sidebar. Staged
     /// rows show the staged diff; untracked files render as one addition.
+    /// Prefers [hunk](https://hunk.dev) when installed.
     fn open_diff(&mut self, repo: usize, entry: &FileEntry, staged: bool) {
         let Some(pane_id) = self.pane_ctl.as_ref().map(|c| c.pane_id.clone()) else {
             self.flash = Some(("diff preview needs a herdr pane".into(), true));
             return;
         };
         let Some(repo) = self.repos.get(repo) else { return };
-        let kind = if staged {
-            "staged"
-        } else if entry.letter == 'U' {
-            "untracked"
+        let root = repo.git.root();
+        let payload = if herdr_sidebar::viewer::hunk_bin().is_some() {
+            herdr_sidebar::viewer::hunk_diff_payload(root, staged)
         } else {
-            "worktree"
+            let kind = if staged {
+                "staged"
+            } else if entry.letter == 'U' {
+                "untracked"
+            } else {
+                "worktree"
+            };
+            herdr_sidebar::viewer::diff_request(root, &entry.path, kind)
         };
-        let payload =
-            herdr_sidebar::viewer::diff_request(repo.git.root(), &entry.path, kind);
-        if let Err(e) =
-            herdr_sidebar::viewer::open_in_pane(&pane_id, repo.git.root(), &payload)
-        {
+        if let Err(e) = herdr_sidebar::viewer::open_in_pane(&pane_id, root, &payload) {
             self.flash = Some((e, true));
         }
     }

@@ -285,6 +285,7 @@ impl App {
         self.last_beat = std::time::Instant::now();
         if let Some(ctl) = &self.pane_ctl {
             ctl.report_tokens(MY_VIEW, self.merged());
+            herdr_sidebar::viewer::touch_hunk_preview(&ctl.pane_id);
         }
         self.follow_agent_cwd();
         self.enforce_preferred_width();
