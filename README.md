@@ -63,7 +63,7 @@ Steve's local [herdr](https://herdr.dev) plugins in one repo. `herdr-sidebar` is
 - **Stage, unstage, commit, sync** with a VS Code-shaped diff (dual gutters, tinted rows)
 - **✧ suggest** writes a commit subject from the pending diff (`claude` CLI, filename fallback)
 - **Graph, commits, file history, branches, worktrees, remotes, stashes, tags**
-- **Live diffs** in [hunk](https://hunk.dev) when it is installed (`hunk diff --watch`). Git view fills an empty preview. prefix+d opens hunk from any pane. Falls back to the built-in renderer without hunk
+- **Live diffs** in [hunk](https://hunk.dev) when it is installed (`hunk diff --watch`). Git view fills an empty preview. prefix+u opens hunk from any pane. Falls back to the built-in renderer without hunk
 
 ### 🧩 **Workspace helpers**
 - **git-badge** puts `*` next to the folder name when the worktree is dirty or unpushed
@@ -77,7 +77,7 @@ Steve's local [herdr](https://herdr.dev) plugins in one repo. `herdr-sidebar` is
 
 | Dir | Plugin id | What |
 |-----|-----------|------|
-| `sidebar/` | `herdr-sidebar` | Explorer + SCM + preview (0.32.0) |
+| `sidebar/` | `herdr-sidebar` | Explorer + SCM + preview (0.33.0) |
 | `git-badge/` | `herdr-git-badge` | Folder `*` when dirty or unpushed |
 | `space-status/` | `herdr-space-status` | 🔨 working, ✅ done, ⚠️ blocked, ⚪ idle |
 | `space-title/` | `herdr-space-title` | Rename spaces from session titles |
@@ -152,7 +152,7 @@ Disk wins: if the file changes on disk, the pane reloads even while you watch an
 | `A` | ✧ suggest message |
 | `j` `k` | move (sidebar focused, no prefix) |
 | click / `o` | open hunk (or built-in diff) |
-| prefix+d | open hunk in this tab |
+| prefix+u | open hunk in this tab |
 | `S` | sync |
 | `r` | refresh |
 
@@ -197,7 +197,7 @@ herdr plugin action invoke herdr-sidebar.open-git        # separate SCM pane
 herdr plugin action invoke herdr-sidebar.new-agent       # new workspace + Grok
 herdr plugin action invoke herdr-sidebar.redeploy        # respawn every sidebar pane
 sidebar/target/release/herdr-sidebar --open-file todos.md  # agent: this tab's preview
-herdr plugin action invoke herdr-sidebar.open-hunk         # prefix+d: hunk in this tab
+herdr plugin action invoke herdr-sidebar.open-hunk         # prefix+u: hunk in this tab
 ```
 
 Windows uses the `-windows` action ids (`open-sidebar-windows`, and so on).

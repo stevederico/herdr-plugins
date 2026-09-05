@@ -1,3 +1,7 @@
+0.33.0
+
+  Rebind hunk prefix
+
 0.32.0
 
   Open hunk from prefix
