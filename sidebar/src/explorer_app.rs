@@ -352,6 +352,7 @@ impl App {
         let Some(ctl) = &self.pane_ctl else { return };
         ctl.set_label(None);
         ctl.report_tokens(MY_VIEW, self.merged());
+        herdr_sidebar::ipc::claim_right_click(&ctl.pane_id);
     }
 
     /// Open a file in the preview pane beside the sidebar (editable text;

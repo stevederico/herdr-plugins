@@ -24,6 +24,17 @@ pub enum MenuEntry {
     Separator,
 }
 
+/// Platform file-manager label for [`MenuAction::Reveal`].
+pub fn reveal_label() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "Open in Finder"
+    } else if cfg!(target_os = "windows") {
+        "Reveal in File Explorer"
+    } else {
+        "Open Containing Folder"
+    }
+}
+
 /// VS Code-style context menu for a tree row (`is_root` = a right-click on
 /// empty space, targeting the workspace root: creation only).
 pub fn menu_entries(is_root: bool) -> Vec<MenuEntry> {
@@ -43,7 +54,7 @@ pub fn menu_entries(is_root: bool) -> Vec<MenuEntry> {
     }
     entries.extend([
         MenuEntry::Separator,
-        MenuEntry::Action(MenuAction::Reveal, "Reveal in File Explorer"),
+        MenuEntry::Action(MenuAction::Reveal, reveal_label()),
         MenuEntry::Separator,
         MenuEntry::Action(MenuAction::ChangeFolder, "Change Folder…"),
         MenuEntry::Action(MenuAction::ChangeFolderTyped, "Change Folder (Type Path)…"),
@@ -177,9 +188,22 @@ mod tests {
         let row = menu_entries(false);
         assert!(matches!(row[0], MenuEntry::Action(MenuAction::NewFile, _)));
         assert!(row.iter().any(|e| matches!(e, MenuEntry::Action(MenuAction::Delete, _))));
+        assert!(
+            row.iter()
+                .any(|e| matches!(e, MenuEntry::Action(MenuAction::Reveal, label) if *label == reveal_label()))
+        );
         let root = menu_entries(true);
         assert!(!root.iter().any(|e| matches!(e, MenuEntry::Action(MenuAction::Rename, _))));
         assert!(root.iter().any(|e| matches!(e, MenuEntry::Action(MenuAction::Reveal, _))));
+    }
+
+    #[test]
+    fn reveal_label_is_finder_on_macos() {
+        if cfg!(target_os = "macos") {
+            assert_eq!(reveal_label(), "Open in Finder");
+        } else {
+            assert_ne!(reveal_label(), "Open in Finder");
+        }
     }
 
     #[test]

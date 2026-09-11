@@ -76,6 +76,15 @@ pub fn report_identity(pane_id: &str, my: crate::state::View, merged: bool) {
     );
 }
 
+/// Send unmodified right-clicks to this pane app. Herdr's default is the
+/// host pane menu; the frame still opens that menu.
+pub fn claim_right_click(pane_id: &str) {
+    let _ = call_text(
+        "pane.input.set",
+        serde_json::json!({ "pane_id": pane_id, "right_click": "pane" }),
+    );
+}
+
 #[cfg(windows)]
 fn roundtrip(path: &std::path::Path, request: &str) -> std::io::Result<String> {
     let pipe = format!(r"\\.\pipe\{}", path.display());

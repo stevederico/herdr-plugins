@@ -2,7 +2,7 @@
 //! box (with the ✨ suggest button), Commit button, collapsible Staged/Changes
 //! sections, Git-Graph-style drawers (GRAPH, COMMITS, FILE HISTORY, BRANCHES,
 //! REMOTES, STASHES, TAGS), theme-matched file icons, mouse support, and a
-//! Ctrl+right-click context menu — kept interaction-consistent with
+//! right-click context menu — kept interaction-consistent with
 //! herdr-aa-filetree. No own border/title: herdr already frames the pane and
 //! titles it with the pane label.
 //!
@@ -626,6 +626,7 @@ impl App {
         let Some(ctl) = &self.pane_ctl else { return };
         ctl.set_label(None);
         ctl.report_tokens(MY_VIEW, self.merged());
+        herdr_sidebar::ipc::claim_right_click(&ctl.pane_id);
     }
 
     /// Hide the sidebar: snooze this tab (so the quiet ensure hook doesn't
@@ -1005,8 +1006,6 @@ impl App {
             MouseEventKind::ScrollDown => self.scroll_view(3),
             MouseEventKind::Down(MouseButton::Left) => return self.left_click(mouse),
             MouseEventKind::Down(MouseButton::Right) => {
-                // Reaches us only as Ctrl+right-click (herdr's passthrough
-                // modifier); plain right-click opens herdr's own pane menu.
                 self.flash = None;
                 self.open_context_menu(mouse.column, mouse.row);
             }
@@ -1176,7 +1175,7 @@ impl App {
         None
     }
 
-    /// Ctrl+right-click: the VS Code-style context menu.
+    /// Right-click: the VS Code-style context menu.
     fn open_context_menu(&mut self, x: u16, y: u16) {
         let Some(index) = self.row_at(y) else { return };
         self.select(index);
@@ -1205,7 +1204,7 @@ impl App {
             MenuEntry::Action(MenuAction::CopyPath, "Copy Path"),
             MenuEntry::Action(MenuAction::CopyRelativePath, "Copy Relative Path"),
             MenuEntry::Separator,
-            MenuEntry::Action(MenuAction::Reveal, "Reveal in File Explorer"),
+            MenuEntry::Action(MenuAction::Reveal, herdr_sidebar::actions::reveal_label()),
         ]);
         self.overlay = Some(Overlay::Menu {
             x,
@@ -1264,7 +1263,7 @@ impl App {
                 MenuEntry::Action(MenuAction::CopyRef, "Copy Tag Name"),
             ],
             DrawerRef::Worktree(_) => vec![
-                MenuEntry::Action(MenuAction::Reveal, "Reveal in File Explorer"),
+                MenuEntry::Action(MenuAction::Reveal, herdr_sidebar::actions::reveal_label()),
                 MenuEntry::Action(MenuAction::CopyRef, "Copy Path"),
                 MenuEntry::Separator,
                 MenuEntry::Action(MenuAction::RemoveWorktree, "Remove Worktree…"),

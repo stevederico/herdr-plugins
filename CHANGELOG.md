@@ -1,3 +1,7 @@
+0.34.0
+
+  Open in Finder
+
 0.33.0
 
   Rebind hunk prefix
