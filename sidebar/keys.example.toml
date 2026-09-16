@@ -1,0 +1,11 @@
+# Paste into ~/.config/herdr/config.toml, then:
+#   herdr server reload-config
+#
+# Herdr owns keybindings — plugins cannot register them in herdr-plugin.toml.
+# This is the recommended chord for herdr-sidebar.
+
+[[keys.command]]
+key = "prefix+f"
+type = "plugin_action"
+command = "herdr-sidebar.open-sidebar"
+description = "toggle file tree"

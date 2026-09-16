@@ -1,3 +1,7 @@
+0.35.0
+
+  Document prefix+f toggle
+
 0.34.0
 
   Open in Finder

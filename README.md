@@ -29,6 +29,18 @@ herdr plugin link ./space-status
 
 Focus a tab. The sidebar docks on the left. Click a file: the preview opens on the far right.
 
+Recommended herdr chord (plugins cannot ship keybinds — paste into `~/.config/herdr/config.toml`, then `herdr server reload-config`):
+
+```toml
+[[keys.command]]
+key = "prefix+f"
+type = "plugin_action"
+command = "herdr-sidebar.open-sidebar"
+description = "toggle file tree"
+```
+
+Same snippet: `sidebar/keys.example.toml`.
+
 Rebuild later:
 
 ```bash
@@ -77,7 +89,7 @@ Steve's local [herdr](https://herdr.dev) plugins in one repo. `herdr-sidebar` is
 
 | Dir | Plugin id | What |
 |-----|-----------|------|
-| `sidebar/` | `herdr-sidebar` | Explorer + SCM + preview (0.34.0) |
+| `sidebar/` | `herdr-sidebar` | Explorer + SCM + preview (0.35.0) |
 | `git-badge/` | `herdr-git-badge` | Folder `*` when dirty or unpushed |
 | `space-status/` | `herdr-space-status` | 🔨 working, ✅ done, ⚠️ blocked, ⚪ idle |
 | `space-title/` | `herdr-space-title` | Rename spaces from session titles |
@@ -110,6 +122,12 @@ Steve's local [herdr](https://herdr.dev) plugins in one repo. `herdr-sidebar` is
 ## ⌨️ Keys
 
 Hotkey chips live in **Settings**. Footer chips are off by default.
+
+### Herdr (prefix = `Ctrl+B`)
+
+| Key | Action |
+|-----|--------|
+| `prefix+f` | toggle file tree (recommended; see `sidebar/keys.example.toml`) |
 
 ### Explorer
 

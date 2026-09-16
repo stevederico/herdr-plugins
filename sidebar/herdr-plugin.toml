@@ -19,7 +19,7 @@
 
 id = "herdr-sidebar"
 name = "herdr-sidebar"
-version = "0.34.0"
+version = "0.35.0"
 description = "VS Code-style sidebar: file explorer + source control (with ✧ AI commit messages) in one herdr pane."
 min_herdr_version = "0.7.0"
 platforms = ["linux", "macos", "windows"]
@@ -45,11 +45,14 @@ description = "Create a workspace at the current cwd and start Grok."
 command = ["bash", "scripts/new-agent.sh"]
 
 # Toggle the sidebar: open left-docked / focus if unfocused / close if focused.
+# Herdr does not let plugins register keys — recommend in keys.example.toml:
+#   [[keys.command]] key = "prefix+f" type = "plugin_action"
+#   command = "herdr-sidebar.open-sidebar"
 [[actions]]
 id = "open-sidebar"
 platforms = ["linux", "macos"]
 title = "Toggle sidebar"
-description = "Open the sidebar docked on the left (focus it if open; close it if focused)."
+description = "Open the sidebar docked on the left (focus it if open; close it if focused). Recommended key: prefix+f (see keys.example.toml)."
 command = ["bash", "scripts/open-sidebar.sh"]
 
 [[actions]]
