@@ -27,7 +27,7 @@ use herdr_sidebar::state::{self as sidebar, View};
 use herdr_sidebar::state::Exit;
 use herdr_sidebar::ui::{
     TitleAction, branch_icon, draw_scrollbar, gear_icon, hits,
-    popover_above, sibling_panes_of, sparkle_icon, title_action_spans,
+    popover_for_anchor, sibling_panes_of, sparkle_icon, title_action_spans,
     title_actions_visible, title_actions_width, truncate_to, wrap_footer_message,
     wrap_hints,
 };
@@ -1522,7 +1522,7 @@ impl App {
         let area = frame.area();
         let width = 30.min(area.width);
         let height = rows.len() as u16 + 5 + hint_lines.len() as u16;
-        let popup = popover_above(area, gear, width, height);
+        let popup = popover_for_anchor(area, gear, width, height);
         *rect = popup;
 
         let inner_w = usize::from(width.saturating_sub(2));
@@ -2197,7 +2197,7 @@ impl App {
             None => String::new(),
         };
         let gear = Some(Span::styled(
-            format!("{} ", gear_icon(self.theme)),
+            format!(" {} ", gear_icon(self.theme)),
             Style::default().dim(),
         ));
         let gear_w = gear.as_ref().map(Span::width).unwrap_or(0);

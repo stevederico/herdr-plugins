@@ -15,7 +15,7 @@ use herdr_sidebar::icons::{IconTheme, icon};
 use herdr_sidebar::state::{self as sidebar, View};
 use herdr_sidebar::ui::{
     TitleAction, draw_scrollbar, gear_icon, hits,
-    popover_above,
+    popover_for_anchor,
     input_tail, sibling_panes_of, title_action_spans, title_actions_visible,
     title_actions_width, truncate_to, wrap_footer_message, wrap_hints,
 };
@@ -868,7 +868,7 @@ impl App {
         }
     }
 
-    /// Render the Settings popup above the ⚙ and remember its rect for clicks.
+    /// Render the Settings popup next to the ⚙ and remember its rect for clicks.
     fn draw_settings(&mut self, frame: &mut Frame) {
         let rows = self.settings_rows();
         // The hotkey reference lives here now; the footer chips are opt-in.
@@ -880,7 +880,7 @@ impl App {
         let area = frame.area();
         let width = 30.min(area.width);
         let height = rows.len() as u16 + 5 + hint_lines.len() as u16;
-        let popup = popover_above(area, gear, width, height);
+        let popup = popover_for_anchor(area, gear, width, height);
         *rect = popup;
 
         let inner_w = usize::from(width.saturating_sub(2));
@@ -1343,7 +1343,7 @@ impl App {
     /// Code); ⚙ at the right edge, hover title-action buttons sit just left of it.
     fn draw_header(&mut self, frame: &mut Frame, area: Rect) {
         let gear = Some(Span::styled(
-            format!("{} ", gear_icon(self.theme)),
+            format!(" {} ", gear_icon(self.theme)),
             Style::default().dim(),
         ));
         let gear_w = gear.as_ref().map(Span::width).unwrap_or(0) as u16;

@@ -85,13 +85,32 @@ pub fn popover_above(area: Rect, anchor: Rect, width: u16, height: u16) -> Rect 
     let avail = bottom.saturating_sub(area.y).max(1);
     let height = height.min(avail).min(area.height).max(1);
     let y = bottom.saturating_sub(height);
+    let x = popover_x(area, anchor, width);
+    Rect::new(x, y, width, height)
+}
+
+fn popover_x(area: Rect, anchor: Rect, width: u16) -> u16 {
     let right = if anchor.width > 0 {
         (anchor.x + anchor.width).min(area.x + area.width)
     } else {
         area.x + area.width
     };
-    let x = right.saturating_sub(width).max(area.x);
-    Rect::new(x, y, width, height)
+    right.saturating_sub(width).max(area.x)
+}
+
+/// Settings popover that opens **below** the gear when the gear is in the
+/// header (no room above), and **above** when the gear is near the bottom.
+pub fn popover_for_anchor(area: Rect, anchor: Rect, width: u16, height: u16) -> Rect {
+    let width = width.min(area.width).max(1);
+    let space_above = anchor.y.saturating_sub(area.y);
+    let space_below = (area.y + area.height).saturating_sub(anchor.y + anchor.height);
+    if space_below > space_above {
+        let height = height.min(space_below).min(area.height).max(1);
+        let y = (anchor.y + anchor.height).min(area.y + area.height.saturating_sub(height));
+        Rect::new(popover_x(area, anchor, width), y, width, height)
+    } else {
+        popover_above(area, anchor, width, height)
+    }
 }
 
 /// Theme-matched ⚙ settings glyph.
@@ -528,6 +547,19 @@ mod tests {
         let tight = popover_above(area, Rect::new(28, 5, 4, 1), 30, 20);
         assert_eq!(tight.y, 0);
         assert_eq!(tight.height, 5, "shrinks instead of covering the gear");
+    }
+
+    #[test]
+    fn settings_popover_drops_below_a_header_gear() {
+        let area = Rect::new(0, 0, 32, 50);
+        let gear = Rect::new(28, 0, 4, 1);
+        let popup = popover_for_anchor(area, gear, 30, 20);
+        assert_eq!(popup.y, 1, "starts on the row under the header");
+        assert_eq!(popup.height, 20);
+        assert_eq!(popup.x, 2, "right-aligned to the gear");
+        let bottom_gear = Rect::new(28, 47, 4, 1);
+        let above = popover_for_anchor(area, bottom_gear, 30, 20);
+        assert_eq!(above.y + above.height, 47, "still opens above a bottom gear");
     }
 
     #[test]

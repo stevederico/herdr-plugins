@@ -1,3 +1,7 @@
+0.41.0
+
+  Open settings below header gear
+
 0.40.0
 
   Drop git activity tabs
