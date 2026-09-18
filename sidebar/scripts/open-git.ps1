@@ -1,16 +1,13 @@
 # open-git-panel.ps1 -- Windows launcher for the herdr-aa-git source control pane.
 #
 # Idempotent "launch-or-focus, toggle on repeat", scoped to the current tab:
-#   - no Source Control pane in the current tab      -> open one, DOCKED ON THE LEFT edge
+#   - no Source Control pane in the current tab      -> open one, RIGHT OF THE AGENT
 #   - a Source Control pane exists but isn't focused -> focus it
 #   - the focused pane IS the Source Control pane    -> close it (toggle off)
 #
-# Left dock: herdr's `pane split` only splits right/down, so we split the tab's
-# LEFTMOST pane (the one touching the spaces/agents sidebar) to the right with a
-# small left-slot ratio, then `pane swap` the new pane into that left slot.
-# Verified against herdr 0.7.1 (by herdr-aa-filetree, whose launcher this mirrors):
-# the split `--ratio` is the ORIGINAL pane's share, and after a swap the focus
-# stays with the SLOT, not the pane.
+# Right dock: split the agent pane to the right. `--ratio` is the ORIGINAL
+# pane's share, so a large ratio (~0.75) leaves the new pane ~32 columns on
+# the agent's right. No swap.
 #
 # Windows caveats inherited from herdr-file-viewer (see its herdr-plugin.toml):
 # herdr cannot spawn a relative [[panes]] command on Windows (ERROR_PATH_NOT_FOUND),
@@ -59,10 +56,10 @@ function Open-Pane {
     }
     $FocusedId, $FocusedCwd = $fp -split "`t", 2
 
-    # Left-dock plan: leftmost pane of the focused tab + the left-slot ratio.
-    $Target = $FocusedId
-    $Ratio = '0.25'
-    $plan = ((& $HerdrBin pane layout --pane $FocusedId | Out-String) | & $Bin --open-plan).Trim()
+    $Target = ($PanesJson | & $Bin --agent-pane).Trim()
+    if (-not $Target) { $Target = $FocusedId }
+    $Ratio = '0.75'
+    $plan = ((& $HerdrBin pane layout --pane $Target | Out-String) | & $Bin --open-plan $Target).Trim()
     if ($plan) { $Target, $Ratio = $plan -split "`t", 2 }
 
     $splitArgs = @('pane', 'split', $Target, '--direction', 'right', '--ratio', $Ratio, '--no-focus')
@@ -71,8 +68,6 @@ function Open-Pane {
     $np = Get-PaneId $out
     if (-not $np) { exit 1 }
 
-    # Move the new pane into the left slot, then start the panel in it.
-    & $HerdrBin pane swap --source-pane $np --target-pane $Target *> $null
     # Absolute path via the PowerShell CALL OPERATOR: a bare path splits on spaces
     # in the install path, and the `\"` escaping survives PS 5.1's native-arg
     # quote-stripping so herdr receives the quotes intact (herdr-file-viewer GH #58).

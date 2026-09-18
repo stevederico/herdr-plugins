@@ -13,13 +13,13 @@
 #    through wscript → the GUI-subsystem ensure sidecar → the socket API
 #    (any console in a hook chain flashes a Windows Terminal window per focus
 #    event on Windows 11). The [[panes]] entry below serves linux/macos only.
-#  - Launchers dock the sidebar on the LEFT edge of the tab: `pane split` only
-#    goes right/down, so they split the leftmost pane and `pane swap` the new
-#    pane into the left slot.
+#  - Launchers dock the sidebar to the RIGHT of the agent pane: `pane split`
+#    only goes right/down, so they split the agent with a large original-pane
+#    ratio (~0.75) and leave the new explorer on that pane's right. No swap.
 
 id = "herdr-sidebar"
 name = "herdr-sidebar"
-version = "0.35.0"
+version = "0.37.0"
 description = "VS Code-style sidebar: file explorer + source control (with ✧ AI commit messages) in one herdr pane."
 min_herdr_version = "0.7.0"
 platforms = ["linux", "macos", "windows"]
@@ -44,7 +44,7 @@ title = "New Grok Workspace"
 description = "Create a workspace at the current cwd and start Grok."
 command = ["bash", "scripts/new-agent.sh"]
 
-# Toggle the sidebar: open left-docked / focus if unfocused / close if focused.
+# Toggle the sidebar: open right-of-agent / focus if unfocused / close if focused.
 # Herdr does not let plugins register keys — recommend in keys.example.toml:
 #   [[keys.command]] key = "prefix+f" type = "plugin_action"
 #   command = "herdr-sidebar.open-sidebar"
@@ -52,14 +52,14 @@ command = ["bash", "scripts/new-agent.sh"]
 id = "open-sidebar"
 platforms = ["linux", "macos"]
 title = "Toggle sidebar"
-description = "Open the sidebar docked on the left (focus it if open; close it if focused). Recommended key: prefix+f (see keys.example.toml)."
+description = "Open the sidebar to the right of the agent (focus it if open; close it if focused). Recommended key: prefix+f (see keys.example.toml)."
 command = ["bash", "scripts/open-sidebar.sh"]
 
 [[actions]]
 id = "open-sidebar-windows"
 platforms = ["windows"]
 title = "Toggle sidebar"
-description = "Open the sidebar docked on the left (focus it if open; close it if focused)."
+description = "Open the sidebar to the right of the agent (focus it if open; close it if focused)."
 command = ["wscript", "//B", "scripts/launch-ensure.vbs", "--toggle"]
 
 # Separated-panels mode: open the Source Control pane on its own (the ⚙
@@ -112,9 +112,9 @@ description = "Close all sidebar panes in every workspace so they respawn on the
 command = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "scripts/redeploy.ps1"]
 
 # Sidebar mode: on every tab/workspace focus, quietly ensure the focused tab
-# has a left-docked sidebar (idempotent, never steals focus). A tab hooked at
-# first focus still has its single full-height pane, so the sidebar becomes a
-# full-height left column that later splits can't shorten.
+# has a sidebar to the right of the agent (idempotent, never steals focus).
+# A tab hooked at first focus still has its single full-height pane, so the
+# sidebar becomes a full-height right column that later splits can't shorten.
 # tab.created / workspace.created fire when a restarted server RESTORES its
 # session — the resumed tab is already focused, so no focus TRANSITION (and
 # no tab.focused/workspace.focused) ever happens, which used to leave dead

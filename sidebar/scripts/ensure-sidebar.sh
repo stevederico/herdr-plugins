@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ensure-sidebar.sh — unix [[events]] hook body: make sure the FOCUSED tab has
-# a Sidebar pane docked on the left, WITHOUT stealing the user's focus.
+# a Sidebar pane docked to the right of the agent, WITHOUT stealing focus.
 #
 # Runs on tab.focused / workspace.focused / workspace.created, so it must be
 # idempotent and quiet: already present → exit; else open unfocused. After a
@@ -48,9 +48,10 @@ acwd="$(printf '%s' "$panes" | "$bin" --agent-cwd 2>/dev/null || true)"
 [ -n "$acwd" ] && fcwd="$acwd"
 [ -n "$fid" ] || exit 0
 
-target="$fid"
-ratio="0.25"
-plan="$("$herdr_bin" pane layout --pane "$fid" 2>/dev/null | "$bin" --open-plan 2>/dev/null || true)"
+target="$(printf '%s' "$panes" | "$bin" --agent-pane 2>/dev/null || true)"
+[ -n "$target" ] || target="$fid"
+ratio="0.75"
+plan="$("$herdr_bin" pane layout --pane "$target" 2>/dev/null | "$bin" --open-plan "$target" 2>/dev/null || true)"
 if [ -n "$plan" ]; then
   target="${plan%%	*}"
   ratio="${plan#*	}"
@@ -61,7 +62,6 @@ out="$("$herdr_bin" pane split "$target" --direction right --ratio "$ratio" \
 np="$(printf '%s' "$out" | sed -n 's/.*"pane_id":"\([^"]*\)".*/\1/p' | head -n1)"
 [ -n "$np" ] || exit 0
 
-"$herdr_bin" pane swap --source-pane "$np" --target-pane "$target" >/dev/null 2>&1 || true
 "$herdr_bin" pane run "$np" "exec \"$bin\""
 "$herdr_bin" pane rename "$np" --clear >/dev/null 2>&1 || true
 
@@ -76,8 +76,4 @@ for _ in $(seq 1 30); do
   sleep 0.2
 done
 
-# Hand focus back if the swap left it on the explorer (focus follows the slot).
-if [ "$target" = "$fid" ]; then
-  "$herdr_bin" pane focus --direction right --pane "$np" >/dev/null 2>&1 || true
-fi
 exit 0

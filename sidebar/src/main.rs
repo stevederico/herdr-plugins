@@ -41,7 +41,12 @@ fn main() -> std::io::Result<()> {
             return Ok(());
         }
         Some("--open-plan") => {
-            println!("{}", launch::open_plan(&read_stdin()?));
+            let prefer = std::env::args().nth(2);
+            println!("{}", launch::open_plan(&read_stdin()?, prefer.as_deref()));
+            return Ok(());
+        }
+        Some("--agent-pane") => {
+            println!("{}", launch::agent_pane(&read_stdin()?));
             return Ok(());
         }
         Some("--focused-tab") => {
@@ -100,7 +105,10 @@ fn main() -> std::io::Result<()> {
     // Starting view: an explicit `--view` pin (separated panes), else the
     // last-active view when the unified sidebar is on.
     let pinned = if mode.as_deref() == Some("--view") {
-        std::env::args().nth(2).as_deref().and_then(View::from_view_flag)
+        std::env::args()
+            .nth(2)
+            .as_deref()
+            .and_then(View::from_view_flag)
     } else {
         None
     };

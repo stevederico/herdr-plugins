@@ -1,3 +1,7 @@
+0.37.0
+
+  Dock explorer right of agent
+
 0.36.0
 
   Pin grok session UUID

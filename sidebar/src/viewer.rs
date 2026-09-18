@@ -1974,19 +1974,17 @@ fn spawn_command_pane(
     focus_new: bool,
 ) -> Result<(), String> {
     let layout = ipc::call_text("pane.layout", serde_json::json!({ "pane_id": my_pane_id })).ok();
-    // Far-right preview: explorer | grok | preview. Split the rightmost
-    // pane (not our immediate neighbor — that sandwiched preview between
-    // the tree and the agent).
-    let rightmost = layout
-        .as_deref()
-        .and_then(|json| rightmost_pane(json, my_pane_id));
-    // Splitting ourselves (no other panes — e.g. everything else just parked,
-    // leaving us momentarily full-width): keep the width the sidebar had
+    // Far-right preview: agent | explorer | preview. Split the actual
+    // rightmost pane (often the explorer itself when it docks right of the
+    // agent). Splitting anyone else sandwiches preview between agent and tree.
+    let rightmost = layout.as_deref().and_then(rightmost_pane);
+    // Splitting ourselves (we are already the far edge, or everything else
+    // just parked leaving us full-width): keep the width the sidebar had
     // BEFORE the park, not a ballooned 30-50%.
     let own_frac = pre_park_frac.unwrap_or(0.3);
     let (target, ratio) = match &rightmost {
-        Some(id) => (id.clone(), 0.5),
-        None => (my_pane_id.to_string(), own_frac),
+        Some(id) if id != my_pane_id => (id.clone(), 0.5),
+        _ => (my_pane_id.to_string(), own_frac),
     };
     let response = ipc::call_text(
         "pane.split",
@@ -2030,7 +2028,7 @@ fn spawn_command_pane(
 }
 
 /// Split a viewer pane on the far right of the tab so the layout reads
-/// explorer | rest | preview (not explorer | preview | rest).
+/// agent | explorer | preview (not agent | preview | explorer).
 fn spawn_viewer_pane(
     my_pane_id: &str,
     spawn_cwd: &Path,
@@ -2440,9 +2438,9 @@ fn move_into(tab: &str, pane: &str, target: &str, split: &str, ratio: f64) {
     );
 }
 
-/// The rightmost pane in this layout, not `except`. Used to dock preview
-/// on the far right (explorer | grok | preview).
-fn rightmost_pane(layout_json: &str, except: &str) -> Option<String> {
+/// The rightmost pane in this layout. Used to dock preview on the far right
+/// (agent | explorer | preview).
+fn rightmost_pane(layout_json: &str) -> Option<String> {
     #[derive(serde::Deserialize)]
     struct Msg {
         result: Res,
@@ -2473,7 +2471,6 @@ fn rightmost_pane(layout_json: &str, except: &str) -> Option<String> {
         .layout
         .panes
         .iter()
-        .filter(|p| p.pane_id.as_deref() != Some(except))
         .filter_map(|p| Some((p.pane_id.clone()?, p.rect.as_ref()?)))
         .max_by_key(|(_, r)| (r.x + r.width, r.height, -r.y))
         .map(|(id, _)| id)
@@ -2512,7 +2509,10 @@ mod tests {
             "a.rs",
             "worktree"
         )));
-        assert!(control_follows_diff(&hunk_diff_payload(Path::new("/r"), false)));
+        assert!(control_follows_diff(&hunk_diff_payload(
+            Path::new("/r"),
+            false
+        )));
         assert!(!control_follows_diff(&file_request(Path::new("/r/a.rs"))));
         assert!(!control_follows_diff(&show_request(
             Path::new("/r"),
@@ -2692,16 +2692,15 @@ mod tests {
     }
 
     #[test]
-    fn rightmost_pane_skips_explorer_and_picks_far_edge() {
+    fn rightmost_pane_picks_far_edge() {
         let json = r#"{"result":{"layout":{"panes":[
             {"pane_id":"w1:p1","rect":{"x":0,"y":0,"width":20,"height":40}},
             {"pane_id":"w1:p2","rect":{"x":20,"y":0,"width":50,"height":40}},
             {"pane_id":"w1:p3","rect":{"x":70,"y":0,"width":30,"height":40}}
         ]}}}"#;
-        assert_eq!(rightmost_pane(json, "w1:p1").as_deref(), Some("w1:p3"));
-        assert_eq!(rightmost_pane(json, "w1:p3").as_deref(), Some("w1:p2"));
+        assert_eq!(rightmost_pane(json).as_deref(), Some("w1:p3"));
         assert_eq!(
-            rightmost_pane(r#"{"result":{"layout":{"panes":[]}}}"#, "w1:p1"),
+            rightmost_pane(r#"{"result":{"layout":{"panes":[]}}}"#),
             None
         );
     }

@@ -6,8 +6,12 @@
 //!   `CLOSE <pane_id>`, scoped to the focused pane's tab (toggle behavior).
 //! - `--focused-pane`: `herdr pane list` JSON → `<pane_id>\t<cwd>` of the focused
 //!   pane (cwd stripped of the `\\?\` verbatim prefix herdr reports on Windows).
-//! - `--open-plan`: `herdr pane layout` JSON → `<leftmost_pane_id>\t<ratio>`, the
-//!   split target and left-slot share that docks the explorer on the left edge.
+//! - `--open-plan [pane_id]`: `herdr pane layout` JSON → `<pane_id>\t<ratio>`,
+//!   the split target and ORIGINAL-pane share that docks the explorer on that
+//!   pane's right (~32 columns, no swap). Optional pane id pins the target;
+//!   otherwise the leftmost pane (the agent column when the explorer is absent).
+//! - `--agent-pane`: `herdr pane list` JSON → pane id of the agent in the
+//!   focused tab (else the first non-chrome pane).
 
 use serde::Deserialize;
 
@@ -20,6 +24,11 @@ pub const METADATA_SOURCE: &str = "herdr-sidebar-explorer";
 
 /// Preferred explorer width in columns; the ratio is derived from the target pane.
 const TARGET_COLS: f64 = 32.0;
+
+/// Fallback `pane split` ratio when no layout plan is available: the original
+/// pane keeps this share, the new explorer gets the rest (~32 cols on a
+/// typical terminal). Complement of the old left-slot 0.25.
+const DEFAULT_RATIO: f64 = 0.75;
 
 #[derive(Deserialize)]
 struct PaneListMsg {
@@ -144,12 +153,10 @@ pub const HEARTBEAT_STALE_SECS: u64 = 20;
 /// True when `key` is present but its heartbeat timestamp is missing,
 /// unparsable, or older than [`HEARTBEAT_STALE_SECS`]. Absent key = false
 /// (a fresh pane the launcher labeled but whose TUI hasn't reported yet).
-fn token_stale(
-    tokens: &serde_json::Map<String, serde_json::Value>,
-    key: &str,
-    now: u64,
-) -> bool {
-    let Some(value) = tokens.get(key) else { return false };
+fn token_stale(tokens: &serde_json::Map<String, serde_json::Value>, key: &str, now: u64) -> bool {
+    let Some(value) = tokens.get(key) else {
+        return false;
+    };
     let ts = value
         .as_u64()
         .or_else(|| value.as_str().and_then(|s| s.parse().ok()));
@@ -298,31 +305,62 @@ pub fn sibling_agent_cwd(pane_list_json: &str, explorer_pane_id: &str) -> String
     cwd_in_tab(&msg.result.panes, tab)
 }
 
-fn cwd_in_tab(panes: &[Pane], tab: &str) -> String {
+fn pane_in_tab<'a>(panes: &'a [Pane], tab: &str) -> Option<&'a Pane> {
     let in_tab: Vec<&Pane> = panes
         .iter()
         .filter(|p| p.tab_id.as_deref() == Some(tab) && !p.is_chrome())
         .collect();
-    let pick = in_tab
+    in_tab
         .iter()
         .find(|p| p.agent.as_deref().is_some_and(|a| !a.is_empty()))
         .copied()
-        .or_else(|| in_tab.first().copied());
-    pick.and_then(|p| p.cwd.as_deref())
+        .or_else(|| in_tab.first().copied())
+}
+
+fn cwd_in_tab(panes: &[Pane], tab: &str) -> String {
+    pane_in_tab(panes, tab)
+        .and_then(|p| p.cwd.as_deref())
         .map(strip_verbatim)
         .filter(|s| !s.is_empty())
         .unwrap_or_default()
         .to_string()
 }
 
-/// `<pane_id>\t<ratio>` for the left dock: the leftmost pane of the layout (the
-/// one touching the spaces/agents sidebar) and the left-slot share that gives the
-/// explorer ~32 columns after the split+swap. Empty on any failure.
-pub fn open_plan(layout_json: &str) -> String {
+/// Pane id of the agent (or first non-chrome pane) in the focused tab.
+/// Empty on any failure. Split this pane to the right to dock the explorer
+/// beside the agent.
+pub fn agent_pane(pane_list_json: &str) -> String {
+    let Ok(msg) = serde_json::from_str::<PaneListMsg>(strip_bom(pane_list_json)) else {
+        return String::new();
+    };
+    let Some(focused) = msg.result.panes.iter().find(|p| p.focused) else {
+        return String::new();
+    };
+    let Some(tab) = focused.tab_id.as_deref() else {
+        return String::new();
+    };
+    pane_in_tab(&msg.result.panes, tab)
+        .and_then(|p| p.pane_id.as_deref())
+        .filter(|id| is_flag_safe(id))
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// Explorer share of a split (~32 cols, clamped) so the original pane's
+/// `pane split --ratio` is `1 - share` and the new pane lands on the right.
+fn explorer_share(width: i64) -> f64 {
+    (TARGET_COLS / width as f64).clamp(0.15, 0.5)
+}
+
+/// `<pane_id>\t<ratio>` for the right-of-agent dock: split `prefer` (or the
+/// leftmost pane) to the right with the ORIGINAL pane's share, so the new
+/// explorer is ~32 columns on that pane's right. No swap. Empty on failure.
+pub fn open_plan(layout_json: &str, prefer: Option<&str>) -> String {
     let Ok(msg) = serde_json::from_str::<LayoutMsg>(strip_bom(layout_json)) else {
         return String::new();
     };
-    let mut best: Option<(&str, &Rect)> = None;
+    let mut preferred: Option<(&str, &Rect)> = None;
+    let mut leftmost: Option<(&str, &Rect)> = None;
     for pane in &msg.result.layout.panes {
         let (Some(id), Some(rect)) = (pane.pane_id.as_deref(), pane.rect.as_ref()) else {
             continue;
@@ -330,20 +368,28 @@ pub fn open_plan(layout_json: &str) -> String {
         if !is_flag_safe(id) || rect.width <= 0 {
             continue;
         }
-        // Leftmost wins; among a left column of stacked panes, topmost wins.
-        let better = match best {
+        if prefer == Some(id) {
+            preferred = Some((id, rect));
+        }
+        // Leftmost wins as fallback; among a left column, topmost wins.
+        let better = match leftmost {
             None => true,
             Some((_, b)) => (rect.x, rect.y) < (b.x, b.y),
         };
         if better {
-            best = Some((id, rect));
+            leftmost = Some((id, rect));
         }
     }
-    let Some((id, rect)) = best else {
+    let Some((id, rect)) = preferred.or(leftmost) else {
         return String::new();
     };
-    let ratio = (TARGET_COLS / rect.width as f64).clamp(0.15, 0.5);
+    let ratio = 1.0 - explorer_share(rect.width);
     format!("{id}\t{ratio:.2}")
+}
+
+/// Default split ratio when `open_plan` is empty.
+pub fn default_split_ratio() -> f64 {
+    DEFAULT_RATIO
 }
 
 /// The focused pane's tab id from a `pane list` JSON (flag-safe, else empty).
@@ -374,11 +420,7 @@ pub fn tab_of(pane_list_json: &str, pane_id: &str) -> String {
 }
 
 /// Tab for `--open-file`: caller pane, then `HERDR_TAB_ID`, then the focused pane.
-pub fn tab_for_pane(
-    pane_list_json: &str,
-    pane_id: Option<&str>,
-    tab_id: Option<&str>,
-) -> String {
+pub fn tab_for_pane(pane_list_json: &str, pane_id: Option<&str>, tab_id: Option<&str>) -> String {
     if let Some(id) = pane_id.filter(|s| !s.is_empty()) {
         let tab = tab_of(pane_list_json, id);
         if !tab.is_empty() {
@@ -449,20 +491,20 @@ pub fn split_pane_id(response_json: &str) -> Option<String> {
 }
 
 /// One step of the full-height repair: `below` (a pane under the explorer,
-/// truncating its column) should be re-parented as a down-split of `right`
-/// (the pane beside the explorer) in `tab`.
+/// truncating its column) should be re-parented as a down-split of `beside`
+/// (the pane to the left or right of the explorer) in `tab`.
 pub struct RepairStep {
     pub below: String,
-    pub right: String,
+    pub beside: String,
     pub tab: String,
 }
 
 /// When `pane_id` is not a full-height column of its tab, find the pane
-/// directly below it and the pane directly to its right — moving the former
+/// directly below it and the pane directly beside it — moving the former
 /// under the latter (via a bounce through a temp tab; herdr no-ops same-tab
-/// moves) grows the explorer to full height. `None` when already full height
-/// or the layout doesn't match. Called in a loop: each step removes one pane
-/// from under the explorer.
+/// moves) grows the explorer to full height. Works for a left or right
+/// column. `None` when already full height or the layout doesn't match.
+/// Called in a loop: each step removes one pane from under the explorer.
 pub fn repair_step(layout_json: &str, pane_id: &str) -> Option<RepairStep> {
     let msg = serde_json::from_str::<LayoutMsg>(strip_bom(layout_json)).ok()?;
     let layout = &msg.result.layout;
@@ -486,11 +528,14 @@ pub fn repair_step(layout_json: &str, pane_id: &str) -> Option<RepairStep> {
             .find(|(id, rect)| is_flag_safe(id) && pred(rect))
             .map(|(id, _)| id.to_string())
     };
-    let below = find(&|r: &Rect| {
-        r.y == me.y + me.height && r.x <= me.x && me.x < r.x + r.width
-    })?;
-    let right = find(&|r: &Rect| r.x == me.x + me.width && r.y == me.y)?;
-    Some(RepairStep { below, right, tab: tab.to_string() })
+    let below = find(&|r: &Rect| r.y == me.y + me.height && r.x <= me.x && me.x < r.x + r.width)?;
+    let beside =
+        find(&|r: &Rect| r.y == me.y && (r.x == me.x + me.width || r.x + r.width == me.x))?;
+    Some(RepairStep {
+        below,
+        beside,
+        tab: tab.to_string(),
+    })
 }
 
 /// One `herdr pane resize` invocation: which way to move our right edge and by
@@ -505,11 +550,11 @@ pub struct ResizeStep {
 /// Compute the resize step that brings `pane_id` from `term_cols_now` to
 /// `term_cols_target` terminal columns, from a `pane layout` JSON.
 ///
-/// The explorer is a left column, so its right edge is the divider of some
-/// horizontal split: we pick the innermost `right` split whose divider sits at
-/// the pane's right edge and convert the column delta into that split's ratio
-/// space. `None` when the pane or such a split can't be found, or the pane is
-/// already at the target.
+/// Finds the innermost `right` split whose divider sits at the pane's left
+/// or right edge and converts the column delta into that split's ratio space.
+/// A left-column pane grows by moving its right edge right; a right-column
+/// pane grows by moving its left edge left. `None` when the pane or such a
+/// split can't be found, or the pane is already at the target.
 pub fn resize_plan(
     layout_json: &str,
     pane_id: &str,
@@ -529,15 +574,26 @@ pub fn resize_plan(
     let chrome = pane_rect.width - i64::from(term_cols_now);
     let target_rect_w = i64::from(term_cols_target) + chrome.max(0);
 
-    let divider_x = pane_rect.x + pane_rect.width;
     let split = layout
         .splits
         .iter()
         .filter(|s| s.direction.as_deref() == Some("right"))
         .filter_map(|s| Some((s.rect.as_ref()?, s.ratio?)))
-        .filter(|(rect, ratio)| {
-            let split_divider = rect.x + (f64::from(rect.width as i32) * ratio).round() as i64;
-            rect.x <= pane_rect.x && (split_divider - divider_x).abs() <= 2 && rect.width > 0
+        .filter_map(|(rect, ratio)| {
+            if rect.width <= 0 {
+                return None;
+            }
+            let div = rect.x + (f64::from(rect.width as i32) * ratio).round() as i64;
+            let on_left = (div - pane_rect.x).abs() <= 2 && rect.x < pane_rect.x;
+            let on_right =
+                (div - (pane_rect.x + pane_rect.width)).abs() <= 2 && rect.x <= pane_rect.x;
+            if on_left {
+                Some((rect, true))
+            } else if on_right {
+                Some((rect, false))
+            } else {
+                None
+            }
         })
         .min_by_key(|(rect, _)| rect.width)?;
 
@@ -545,8 +601,14 @@ pub fn resize_plan(
     if delta.abs() < 0.005 {
         return None;
     }
+    // Right-column pane (divider on its left): grow = move left. Left-column:
+    // grow = move right.
     Some(ResizeStep {
-        direction: if delta > 0.0 { "right" } else { "left" },
+        direction: if (delta > 0.0) != split.1 {
+            "right"
+        } else {
+            "left"
+        },
         amount: delta.abs(),
     })
 }
@@ -573,14 +635,19 @@ mod tests {
         format!(r#"{{"id":"cli:pane:list","result":{{"panes":[{panes}]}}}}"#)
     }
 
-    const FOCUSED: &str = r#"{"pane_id":"w1:p1","focused":true,"tab_id":"w1:t1","cwd":"C:\\work\\my repo"}"#;
+    const FOCUSED: &str =
+        r#"{"pane_id":"w1:p1","focused":true,"tab_id":"w1:t1","cwd":"C:\\work\\my repo"}"#;
 
     #[test]
     fn decision_opens_when_no_explorer_in_tab() {
         let json = pane_list(&format!(
             r#"{FOCUSED},{{"pane_id":"w1:p9","label":"Explorer","tab_id":"w1:t2"}}"#
         ));
-        assert_eq!(launch_decision(&json, 100), "OPEN", "other-tab Explorer is ignored");
+        assert_eq!(
+            launch_decision(&json, 100),
+            "OPEN",
+            "other-tab Explorer is ignored"
+        );
     }
 
     #[test]
@@ -644,7 +711,11 @@ mod tests {
             let corpse = pane_list(&format!(
                 r#"{FOCUSED},{{"pane_id":"w1:p2","label":"{label}","tab_id":"w1:t1"}}"#
             ));
-            assert_eq!(launch_decision(&corpse, 100), "REPLACE w1:p2", "{label} corpse");
+            assert_eq!(
+                launch_decision(&corpse, 100),
+                "REPLACE w1:p2",
+                "{label} corpse"
+            );
         }
         let sc_corpse = pane_list(&format!(
             r#"{FOCUSED},{{"pane_id":"w1:p3","label":"Source Control","tab_id":"w1:t1"}}"#
@@ -664,7 +735,10 @@ mod tests {
     #[test]
     fn decision_degrades_to_open_on_garbage_or_unsafe_ids() {
         assert_eq!(launch_decision("not json", 100), "OPEN");
-        assert_eq!(launch_decision(&pane_list(r#"{"pane_id":"w1:p1"}"#), 100), "OPEN");
+        assert_eq!(
+            launch_decision(&pane_list(r#"{"pane_id":"w1:p1"}"#), 100),
+            "OPEN"
+        );
         let json = pane_list(&format!(
             r#"{FOCUSED},{{"pane_id":"--evil","label":"Explorer","tab_id":"w1:t1"}}"#
         ));
@@ -680,7 +754,7 @@ mod tests {
             "\u{feff}{}",
             layout(r#"{"pane_id":"w1:p1","rect":{"x":0,"y":0,"width":90,"height":50}}"#)
         );
-        assert_eq!(open_plan(&layout_json), "w1:p1\t0.36");
+        assert_eq!(open_plan(&layout_json, None), "w1:p1\t0.64");
     }
 
     #[test]
@@ -704,18 +778,28 @@ mod tests {
                {"pane_id":"w1:p3","rect":{"x":29,"y":36,"width":90,"height":35}},
                {"pane_id":"w1:p1","rect":{"x":29,"y":1,"width":90,"height":35}}"#,
         );
-        let plan = open_plan(&json);
+        let plan = open_plan(&json, None);
         let (id, ratio) = plan.split_once('\t').unwrap();
         assert_eq!(id, "w1:p1");
-        assert_eq!(ratio, "0.36"); // 32 / 90
+        assert_eq!(ratio, "0.64"); // original keeps 1 - 32/90
+    }
+
+    #[test]
+    fn open_plan_prefers_named_pane() {
+        let json = layout(
+            r#"{"pane_id":"w1:p1","rect":{"x":0,"y":0,"width":90,"height":50}},
+               {"pane_id":"w1:p2","rect":{"x":90,"y":0,"width":200,"height":50}}"#,
+        );
+        assert_eq!(open_plan(&json, Some("w1:p2")), "w1:p2\t0.84"); // 1 - 32/200
+        assert_eq!(open_plan(&json, Some("missing")), "w1:p1\t0.64");
     }
 
     #[test]
     fn open_plan_clamps_ratio() {
         let wide = layout(r#"{"pane_id":"w1:p1","rect":{"x":0,"y":0,"width":400,"height":50}}"#);
-        assert_eq!(open_plan(&wide), "w1:p1\t0.15");
+        assert_eq!(open_plan(&wide, None), "w1:p1\t0.85");
         let narrow = layout(r#"{"pane_id":"w1:p1","rect":{"x":0,"y":0,"width":40,"height":50}}"#);
-        assert_eq!(open_plan(&narrow), "w1:p1\t0.50");
+        assert_eq!(open_plan(&narrow, None), "w1:p1\t0.50");
     }
 
     #[test]
@@ -734,7 +818,8 @@ mod tests {
 
     #[test]
     fn split_pane_id_extracts_and_validates() {
-        let json = r#"{"id":"x","result":{"pane":{"pane_id":"w3:p5","cwd":"C:x"},"type":"pane_info"}}"#;
+        let json =
+            r#"{"id":"x","result":{"pane":{"pane_id":"w3:p5","cwd":"C:x"},"type":"pane_info"}}"#;
         assert_eq!(split_pane_id(json), Some("w3:p5".to_string()));
         let evil = r#"{"id":"x","result":{"pane":{"pane_id":"--evil"},"type":"pane_info"}}"#;
         assert_eq!(split_pane_id(evil), None);
@@ -764,7 +849,24 @@ mod tests {
                {"pane_id":"p4","rect":{"x":90,"y":0,"width":90,"height":50}}"#,
         );
         let step = repair_step(&json, "e").unwrap();
-        assert_eq!((step.below.as_str(), step.right.as_str(), step.tab.as_str()), ("p7", "p1", "w1:t1"));
+        assert_eq!(
+            (step.below.as_str(), step.beside.as_str(), step.tab.as_str()),
+            ("p7", "p1", "w1:t1")
+        );
+    }
+
+    #[test]
+    fn repair_step_finds_left_neighbor_for_right_column() {
+        let json = layout_with_area(
+            r#"{"pane_id":"p1","rect":{"x":0,"y":0,"width":148,"height":25}},
+               {"pane_id":"e","rect":{"x":148,"y":0,"width":32,"height":25}},
+               {"pane_id":"p7","rect":{"x":148,"y":25,"width":32,"height":25}}"#,
+        );
+        let step = repair_step(&json, "e").unwrap();
+        assert_eq!(
+            (step.below.as_str(), step.beside.as_str(), step.tab.as_str()),
+            ("p7", "p1", "w1:t1")
+        );
     }
 
     #[test]
@@ -814,7 +916,10 @@ mod tests {
     fn resize_plan_returns_none_when_unresizable_or_at_target() {
         assert!(resize_plan("not json", "e", 30, 4).is_none());
         // No split with a divider at the pane's edge (e.g. the only pane).
-        let solo = layout_with_splits(r#"{"pane_id":"e","rect":{"x":0,"y":0,"width":100,"height":50}}"#, "");
+        let solo = layout_with_splits(
+            r#"{"pane_id":"e","rect":{"x":0,"y":0,"width":100,"height":50}}"#,
+            "",
+        );
         assert!(resize_plan(&solo, "e", 98, 30).is_none());
         // Already at the target.
         let json = layout_with_splits(
@@ -825,11 +930,27 @@ mod tests {
     }
 
     #[test]
+    fn resize_plan_grows_right_column_by_moving_left() {
+        // Explorer: 32 rect cols at the RIGHT of a 160-col split (ratio 0.8).
+        let json = layout_with_splits(
+            r#"{"pane_id":"w1:p2","rect":{"x":128,"y":0,"width":32,"height":50}},
+               {"pane_id":"w1:p1","rect":{"x":0,"y":0,"width":128,"height":50}}"#,
+            r#"{"direction":"right","ratio":0.8,"rect":{"x":0,"y":0,"width":160,"height":50}}"#,
+        );
+        let step = resize_plan(&json, "w1:p2", 30, 40).unwrap();
+        assert_eq!(step.direction, "left");
+        assert!((step.amount - 10.0 / 160.0).abs() < 1e-9);
+        let step = resize_plan(&json, "w1:p2", 30, 4).unwrap();
+        assert_eq!(step.direction, "right");
+        assert!((step.amount - 26.0 / 160.0).abs() < 1e-9);
+    }
+
+    #[test]
     fn open_plan_is_empty_on_failure() {
-        assert_eq!(open_plan("not json"), "");
-        assert_eq!(open_plan(&layout("")), "");
+        assert_eq!(open_plan("not json", None), "");
+        assert_eq!(open_plan(&layout(""), None), "");
         let unsafe_id = layout(r#"{"pane_id":"--x","rect":{"x":0,"y":0,"width":90,"height":50}}"#);
-        assert_eq!(open_plan(&unsafe_id), "");
+        assert_eq!(open_plan(&unsafe_id, None), "");
     }
 
     fn tab_with_chrome_and_agent() -> String {
@@ -844,6 +965,7 @@ mod tests {
     fn agent_cwd_is_stable_project_dir() {
         let json = tab_with_chrome_and_agent();
         assert_eq!(agent_cwd(&json), "/projects/scratchpad");
+        assert_eq!(agent_pane(&json), "a");
         assert_eq!(sibling_agent_cwd(&json, "e"), "/projects/scratchpad");
         assert_eq!(agent_cwd("not json"), "");
         assert_eq!(sibling_agent_cwd(&json, "missing"), "");

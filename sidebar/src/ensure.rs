@@ -95,12 +95,23 @@ fn open(panes_json: &str, focus_new: bool) -> std::io::Result<()> {
         return Ok(());
     };
 
-    let layout = ipc::call_text("pane.layout", serde_json::json!({ "pane_id": fid }))?;
-    let plan = launch::open_plan(&layout);
+    let agent = launch::agent_pane(panes_json);
+    let prefer = if agent.is_empty() {
+        fid
+    } else {
+        agent.as_str()
+    };
+    let layout = ipc::call_text("pane.layout", serde_json::json!({ "pane_id": prefer }))?;
+    let plan = launch::open_plan(&layout, Some(prefer));
     let (target, ratio) = plan
         .split_once('\t')
-        .map(|(t, r)| (t.to_string(), r.parse::<f64>().unwrap_or(0.25)))
-        .unwrap_or_else(|| (fid.to_string(), 0.25));
+        .map(|(t, r)| {
+            (
+                t.to_string(),
+                r.parse::<f64>().unwrap_or(launch::default_split_ratio()),
+            )
+        })
+        .unwrap_or_else(|| (prefer.to_string(), launch::default_split_ratio()));
 
     let mut split = serde_json::json!({
         "target_pane_id": target,
@@ -117,10 +128,6 @@ fn open(panes_json: &str, focus_new: bool) -> std::io::Result<()> {
         return Ok(());
     };
 
-    ipc::call_text(
-        "pane.swap",
-        serde_json::json!({ "source_pane_id": new_pane, "target_pane_id": target }),
-    )?;
     if let Some(command) = explorer_command() {
         ipc::call_text(
             "pane.send_input",
@@ -148,24 +155,22 @@ fn open(panes_json: &str, focus_new: bool) -> std::io::Result<()> {
     if focus_new {
         focus(&new_pane)?;
     } else {
-        // Quiet mode must never move focus, but the split/swap can (focus
-        // follows the SLOT, not the pane) — unconditionally restore the pane
-        // that was focused when we started.
+        // Quiet mode must never move focus. Restore the pane that was
+        // focused when we started, in case the split moved it.
         focus(fid)?;
     }
     Ok(())
 }
 
-/// Grow the freshly-opened explorer into a full-height left column. When the
-/// tab's left area was already split vertically, the explorer only gets the
-/// top slot; each repair step re-parents the pane below it as a down-split of
-/// the pane beside it. herdr no-ops same-tab moves, so each step bounces the
-/// pane through a temporary tab (herdr auto-closes it once emptied).
+/// Grow the freshly-opened explorer into a full-height column. When the
+/// agent was already split vertically, the explorer only gets the top slot;
+/// each repair step re-parents the pane below it as a down-split of the pane
+/// beside it. herdr no-ops same-tab moves, so each step bounces the pane
+/// through a temporary tab (herdr auto-closes it once emptied).
 /// Best-effort: any miss just leaves the layout as it was.
 fn full_height_repair(pane_id: &str) {
     for _ in 0..4 {
-        let Ok(layout) =
-            ipc::call_text("pane.layout", serde_json::json!({ "pane_id": pane_id }))
+        let Ok(layout) = ipc::call_text("pane.layout", serde_json::json!({ "pane_id": pane_id }))
         else {
             return;
         };
@@ -190,7 +195,7 @@ fn full_height_repair(pane_id: &str) {
                 "destination": {
                     "type": "tab",
                     "tab_id": step.tab,
-                    "target_pane_id": step.right,
+                    "target_pane_id": step.beside,
                     "split": "down",
                 },
                 "focus": false,

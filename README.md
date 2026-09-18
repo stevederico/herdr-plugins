@@ -27,7 +27,7 @@ herdr plugin link ./space-title
 herdr plugin link ./space-status
 ```
 
-Focus a tab. The sidebar docks on the left. Click a file: the preview opens on the far right.
+Focus a tab. The sidebar docks to the right of the agent. Click a file: the preview opens on the far right.
 
 Recommended herdr chord (plugins cannot ship keybinds — paste into `~/.config/herdr/config.toml`, then `herdr server reload-config`):
 
@@ -64,7 +64,7 @@ Steve's local [herdr](https://herdr.dev) plugins in one repo. `herdr-sidebar` is
 - **Activity bar** switches Files (`1`) and Git (`2`) in process: no pane flash
 
 ### 👁️ **File Preview**
-- **Opens on the far right** (explorer | agent | preview). One viewer per tab; clicks reuse it
+- **Opens on the far right** (agent | explorer | preview). One viewer per tab; clicks reuse it
 - **Live-reloads from disk** when an agent (or anything else) writes the open file. Markdown included. ~80ms
 - **Markdown** opens Rendered. Lines wrap to the pane. Click the chip for Raw. Type in Rendered to drop back into Raw. Click a box to toggle tasks
 - **Edit**: type, Ctrl+S to save, Ctrl+A / Ctrl+C to copy
@@ -89,7 +89,7 @@ Steve's local [herdr](https://herdr.dev) plugins in one repo. `herdr-sidebar` is
 
 | Dir | Plugin id | What |
 |-----|-----------|------|
-| `sidebar/` | `herdr-sidebar` | Explorer + SCM + preview (0.35.0) |
+| `sidebar/` | `herdr-sidebar` | Explorer + SCM + preview (0.37.0) |
 | `git-badge/` | `herdr-git-badge` | Folder `*` when dirty or unpushed |
 | `space-status/` | `herdr-space-status` | 🔨 working, ✅ done, ⚠️ blocked, ⚪ idle |
 | `space-title/` | `herdr-space-title` | Rename spaces from session titles |
@@ -242,13 +242,13 @@ Markdown preview is hand-rolled (`sidebar/src/md.rs`): no markdown crate. File f
 
 One `herdr-sidebar` binary, three roles:
 
-1. **Explorer / SCM TUI** in the left pane (unified, or `--view explorer|git`)
-2. **`--preview <ctl>`** in the right pane: file contents, markdown, media, git diffs
+1. **Explorer / SCM TUI** to the right of the agent (unified, or `--view explorer|git`)
+2. **`--preview <ctl>`** on the far right: file contents, markdown, media, git diffs
 3. **`herdr-sidebar-ensure`** windowless sidecar for Windows hooks (no console flash)
 
 The sidebar writes a **control file** per tab (`herdr-sidebar-preview-<pane>.ctl`). The viewer polls it and reloads in place, so clicks never churn panes. For an open file it also re-reads the path when the bytes change, so an agent write shows up without another click.
 
-Pane identity is a heartbeat token on `pane.report_metadata`. Launchers treat a stale stamp as a dead pane and replace it. Focus/create hooks dock a left sidebar per tab and heal corpses after a herdr restart.
+Pane identity is a heartbeat token on `pane.report_metadata`. Launchers treat a stale stamp as a dead pane and replace it. Focus/create hooks dock a sidebar to the right of the agent per tab and heal corpses after a herdr restart.
 
 <br />
 

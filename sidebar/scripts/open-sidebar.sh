@@ -2,15 +2,14 @@
 # open-explorer.sh — unix launcher for the herdr-sidebar explorer pane.
 #
 # Idempotent "launch-or-focus, toggle on repeat", scoped to the current tab:
-#   - no Explorer pane in the current tab       -> open one, DOCKED ON THE LEFT edge
+#   - no Explorer pane in the current tab       -> open one, RIGHT OF THE AGENT
 #   - an Explorer pane exists but isn't focused -> focus it
 #   - the focused pane IS the Explorer pane     -> close it (toggle off)
 #
-# Left dock: herdr's `pane split` only splits right/down, so we split the tab's
-# LEFTMOST pane (the one touching the spaces/agents sidebar) to the right with a
-# small left-slot ratio, then `pane swap` the new pane into that left slot. The
-# split `--ratio` is the ORIGINAL pane's share; after a swap, focus stays with
-# the SLOT, not the pane (both verified against herdr 0.7.1).
+# Right dock: herdr's `pane split` only splits right/down, so we split the
+# agent pane to the right. `--ratio` is the ORIGINAL pane's share, so a large
+# ratio (~0.75) leaves the new explorer ~32 columns on the agent's right.
+# No swap.
 #
 # All ids/ratios come from the binary's unit-tested stdin modes
 # (--launch-decision / --focused-pane / --open-plan), never ad-hoc JSON parsing;
@@ -22,7 +21,7 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 bin="$script_dir/../target/release/herdr-sidebar"
 
 # Without the binary there is no decision logic; fall back to herdr's declarative
-# pane open (right split, not left-docked — degraded but functional).
+# pane open (right split of the current pane — degraded but functional).
 if [ ! -x "$bin" ]; then
   exec "$herdr_bin" plugin pane open \
     --plugin herdr-sidebar \
@@ -66,9 +65,10 @@ open_pane() {
       --entrypoint filetree --placement split --direction right --focus
   fi
 
-  target="$fid"
-  ratio="0.25"
-  plan="$("$herdr_bin" pane layout --pane "$fid" 2>/dev/null | "$bin" --open-plan 2>/dev/null || true)"
+  target="$(printf '%s' "$panes" | "$bin" --agent-pane 2>/dev/null || true)"
+  [ -n "$target" ] || target="$fid"
+  ratio="0.75"
+  plan="$("$herdr_bin" pane layout --pane "$target" 2>/dev/null | "$bin" --open-plan "$target" 2>/dev/null || true)"
   if [ -n "$plan" ]; then
     target="${plan%%	*}"
     ratio="${plan#*	}"
@@ -79,8 +79,6 @@ open_pane() {
   np="$(printf '%s' "$out" | sed -n 's/.*"pane_id":"\([^"]*\)".*/\1/p' | head -n1)"
   [ -n "$np" ] || exit 1
 
-  # Move the new pane into the left slot, then start the explorer in it.
-  "$herdr_bin" pane swap --source-pane "$np" --target-pane "$target" >/dev/null 2>&1 || true
   "$herdr_bin" pane run "$np" "exec \"$bin\""
   "$herdr_bin" pane rename "$np" --clear >/dev/null 2>&1 || true
   # Give the TUI time to stamp its identity token before hooks re-check.
