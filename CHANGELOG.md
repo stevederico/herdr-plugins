@@ -1,3 +1,7 @@
+0.42.0
+
+  Folder as title
+
 0.41.0
 
   Open settings below header gear

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Copy Grok session titles onto workspace labels.
+# Copy the folder name onto the workspace label (title).
+# Copy the Grok/agent session title onto $folder (subtitle).
 # Pin the live Grok session UUID on the workspace so `g` can resume it
 # after the pane process dies.
 set -euo pipefail
@@ -208,19 +209,19 @@ for p in panes:
     if wid not in best or p.get("focused"):
         best[wid] = lab
 
-for wid, lab in best.items():
+for wid, fold in folders.items():
     cur = labels.get(wid, "")
-    if lab and lab != cur:
+    if fold and fold != cur:
         subprocess.run(
-            [herdr, "workspace", "rename", wid, lab],
+            [herdr, "workspace", "rename", wid, fold],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             check=False,
         )
 
-for wid, fold in folders.items():
+for wid, lab in best.items():
     subprocess.run(
-        [herdr, "workspace", "report-metadata", wid, "--source", "herdr-space-title", "--token", f"folder={fold}"],
+        [herdr, "workspace", "report-metadata", wid, "--source", "herdr-space-title", "--token", f"folder={lab}"],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         check=False,
@@ -234,7 +235,10 @@ for w in spaces:
     if existing:
         sessions[wid] = existing
         continue
-    sid = match_session_by_title(w.get("label") or "", cwds.get(wid) or "", summaries)
+    tokens = w.get("tokens") or {}
+    sid = match_session_by_title(tokens.get("folder") or "", cwds.get(wid) or "", summaries)
+    if not sid:
+        sid = match_session_by_title(w.get("label") or "", cwds.get(wid) or "", summaries)
     if sid:
         sessions[wid] = sid
 
