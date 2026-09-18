@@ -1,3 +1,7 @@
+0.39.0
+
+  Remove footer hide chrome
+
 0.38.0
 
   Keep tree width on preview

@@ -76,21 +76,6 @@ pub fn draw_scrollbar(frame: &mut Frame, area: Rect, total: usize, viewport: usi
 /// Rows the unified activity bar occupies (icon row + half-block caps).
 pub const ACTIVITY_BAR_ROWS: u16 = 3;
 
-/// True when a click at pane-local (column, row) lands on the `«` collapse
-/// button: the 3-cell region at the right end of the footer line, mirroring
-/// herdr's own sidebar collapse control. `bottom_inset` skips a docked
-/// activity bar sitting below that footer.
-pub fn hits_collapse_button(
-    column: u16,
-    row: u16,
-    pane_width: u16,
-    pane_height: u16,
-    bottom_inset: u16,
-) -> bool {
-    row == pane_height.saturating_sub(1 + bottom_inset)
-        && column >= pane_width.saturating_sub(4)
-}
-
 /// Settings popover: sits above `anchor` (the ⚙), right-aligned to it,
 /// clamped inside `area`. Shrinks rather than covering the button.
 pub fn popover_above(area: Rect, anchor: Rect, width: u16, height: u16) -> Rect {
@@ -333,9 +318,9 @@ pub fn wrap_line(line: &Line<'static>, width: usize) -> Vec<Line<'static>> {
 }
 
 /// Word-wrap a uniform-style footer message to the pane width: one leading
-/// space per line, `reserve` columns kept clear of the right edge (the «
-/// button zone). Unbreakable words longer than a line hard-break. Never
-/// returns an empty vec — footers size themselves from `.len()`.
+/// space per line, `reserve` columns kept clear of the right edge.
+/// Unbreakable words longer than a line hard-break. Never returns an empty
+/// vec — footers size themselves from `.len()`.
 pub fn wrap_footer_message(text: &str, width: u16, reserve: u16) -> Vec<String> {
     let max = usize::from(width.max(12))
         .saturating_sub(usize::from(reserve))

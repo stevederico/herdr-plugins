@@ -1,13 +1,11 @@
 //! TUI state and rendering: a VS Code Explorer-style tree with disclosure arrows,
-//! nested indentation, per-file-type icons, and a VS Code-like collapse-to-sliver
-//! (the `«` button, or `b`): the pane narrows to a strip with EXPLORER written
-//! sideways, resized through the herdr CLI since only the host controls pane size.
+//! nested indentation, per-file-type icons, and `b` to hide the pane.
 
 use std::path::{Path, PathBuf};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::Frame;
-use ratatui::layout::{Alignment, Constraint, Layout, Rect};
+use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, List, ListItem, Paragraph};
@@ -17,7 +15,7 @@ use herdr_sidebar::icons::{IconTheme, icon};
 use herdr_sidebar::state::{self as sidebar, View};
 use herdr_sidebar::ui::{
     TitleAction, ACTIVITY_BAR_ROWS, activity_icons, draw_scrollbar, gear_icon, hits,
-    hits_collapse_button, popover_above,
+    popover_above,
     input_tail, sibling_panes_of, title_action_spans, title_actions_visible,
     title_actions_width, truncate_to, wrap_footer_message, wrap_hints,
 };
@@ -170,7 +168,6 @@ pub struct App {
     /// Pane size from the last draw; sizing decisions and PageUp/PageDown
     /// strides are based on what was actually rendered.
     last_width: u16,
-    last_height: u16,
     page: usize,
     /// Row index under the mouse cursor, for the hover highlight.
     hovered: Option<usize>,
@@ -253,7 +250,6 @@ impl App {
             theme,
             pane_ctl,
             last_width: DEFAULT_EXPANDED_WIDTH,
-            last_height: 24,
             page: 20,
             hovered: None,
             body: BodyGeom::default(),
@@ -577,16 +573,6 @@ impl App {
                     .find(|(rect, _)| hits(*rect, mouse.column, mouse.row))
                 {
                     self.title_action(action);
-                    return None;
-                }
-                if hits_collapse_button(
-                    mouse.column,
-                    mouse.row,
-                    self.last_width,
-                    self.last_height,
-                    if self.merged() { ACTIVITY_BAR_ROWS } else { 0 },
-                ) {
-                    self.hide();
                     return None;
                 }
                 let index = self.row_at(mouse.row)?;
@@ -1293,7 +1279,6 @@ impl App {
 
     pub fn draw(&mut self, frame: &mut Frame) {
         self.last_width = frame.area().width;
-        self.last_height = frame.area().height;
         // No own border/title: herdr already frames the pane and titles it with
         // the pane label ("Explorer"/"Sidebar") — a second border read as a
         // double frame.
@@ -1354,23 +1339,8 @@ impl App {
             offset: self.scroll,
         };
 
-        // Collapse button at the bottom-right of the LAST footer line,
-        // mirroring herdr's own sidebar. hits_collapse_button skips the
-        // activity bar docked below this footer when unified.
-        let last_line = Rect::new(
-            footer.x,
-            footer.y + footer.height.saturating_sub(1),
-            footer.width,
-            1,
-        );
-        let [_, footer_button] =
-            Layout::horizontal([Constraint::Min(0), Constraint::Length(3)]).areas(last_line);
-        frame.render_widget(
-            Paragraph::new("«".bold().fg(Color::LightBlue)).alignment(Alignment::Center),
-            footer_button,
-        );
         let footer_lines: Vec<Line> = if let Some((msg, color)) = self.footer_message() {
-            wrap_footer_message(&msg, footer.width, 4)
+            wrap_footer_message(&msg, footer.width, 0)
                 .into_iter()
                 .map(|l| l.fg(color).into())
                 .collect()
@@ -1381,7 +1351,7 @@ impl App {
                     // the TAIL of a long input so the cursor stays visible.
                     let head = format!(" {title}: ");
                     let hint = "  (⏎ ok · esc cancel)";
-                    let fixed = Span::raw(head.as_str()).width() + 1 + 4;
+                    let fixed = Span::raw(head.as_str()).width() + 1;
                     let width = usize::from(footer.width);
                     let hint_fits =
                         fixed + Span::raw(hint).width() + Span::raw(input.as_str()).width()
@@ -1406,21 +1376,8 @@ impl App {
                 _ => Vec::new(),
             }
         };
-        let footer_empty = footer_lines.is_empty();
-        frame.render_widget(Paragraph::new(footer_lines), footer);
-        if footer_empty {
-            let hint_area = Rect::new(
-                last_line.x,
-                last_line.y,
-                last_line.width.saturating_sub(3),
-                1,
-            );
-            frame.render_widget(
-                Paragraph::new(
-                    " ctrl+rclick for menus".dim().italic(),
-                ),
-                hint_area,
-            );
+        if !footer_lines.is_empty() {
+            frame.render_widget(Paragraph::new(footer_lines), footer);
         }
 
         match self.overlay {
@@ -1521,10 +1478,13 @@ impl App {
     /// shrinks instead); hints wrap as before.
     fn footer_height(&self, width: u16) -> u16 {
         if let Some((msg, _)) = self.footer_message() {
-            return wrap_footer_message(&msg, width, 4).len() as u16;
+            return wrap_footer_message(&msg, width, 0).len() as u16;
         }
-        if self.overlay.is_some() || !self.show_hotkeys() {
-            return 1; // prompt / menu / settings share one line with «
+        if matches!(&self.overlay, Some(Overlay::Prompt { .. })) {
+            return 1;
+        }
+        if !self.show_hotkeys() {
+            return 0;
         }
         wrap_hints(&self.hints(), width, 3).len() as u16
     }
@@ -1755,20 +1715,6 @@ fn should_follow_cwd(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn collapse_button_hit_region_is_header_right_edge() {
-        assert!(hits_collapse_button(30, 49, 32, 50, 0), "footer right edge");
-        assert!(hits_collapse_button(28, 49, 32, 50, 0));
-        assert!(!hits_collapse_button(27, 49, 32, 50, 0), "left of the button");
-        assert!(!hits_collapse_button(30, 0, 32, 50, 0), "header row");
-        assert!(!hits_collapse_button(30, 48, 32, 50, 0), "tree row");
-        assert!(
-            hits_collapse_button(30, 46, 32, 50, ACTIVITY_BAR_ROWS),
-            "footer sits above a 3-row activity dock"
-        );
-        assert!(!hits_collapse_button(30, 49, 32, 50, ACTIVITY_BAR_ROWS));
-    }
 
     #[test]
     fn menu_navigation_skips_separators_and_clamps() {

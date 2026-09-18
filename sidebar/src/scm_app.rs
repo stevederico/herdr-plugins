@@ -27,7 +27,7 @@ use herdr_sidebar::state::{self as sidebar, View};
 use herdr_sidebar::state::Exit;
 use herdr_sidebar::ui::{
     TitleAction, ACTIVITY_BAR_ROWS, activity_icons, branch_icon, draw_scrollbar, gear_icon, hits,
-    hits_collapse_button, popover_above, sibling_panes_of, sparkle_icon, title_action_spans,
+    popover_above, sibling_panes_of, sparkle_icon, title_action_spans,
     title_actions_visible, title_actions_width, truncate_to, within, wrap_footer_message,
     wrap_hints,
 };
@@ -528,7 +528,6 @@ pub struct App {
     mouse_pos: Option<(u16, u16)>,
     page: usize,
     last_width: u16,
-    last_height: u16,
     // Merged-sidebar state.
     sidebar_state: sidebar::State,
     other_exe: Option<PathBuf>,
@@ -588,7 +587,6 @@ impl App {
             mouse_pos: None,
             page: 20,
             last_width: 40,
-            last_height: 24,
             sidebar_state,
             other_exe,
             pane_ctl,
@@ -1016,16 +1014,6 @@ impl App {
 
     fn left_click(&mut self, mouse: MouseEvent) -> Option<Exit> {
         self.flash = None;
-        if hits_collapse_button(
-            mouse.column,
-            mouse.row,
-            self.last_width,
-            self.last_height,
-            if self.merged() { ACTIVITY_BAR_ROWS } else { 0 },
-        ) {
-            self.hide();
-            return None;
-        }
         let (x, y) = (mouse.column, mouse.row);
         let z = self.zones;
         if self.merged() && y == z.activity_row {
@@ -2150,7 +2138,6 @@ impl App {
     pub fn draw(&mut self, frame: &mut Frame) {
         let area = frame.area();
         self.last_width = area.width;
-        self.last_height = area.height;
 
         if self.repos.is_empty() {
             let text = format!(
@@ -2180,7 +2167,7 @@ impl App {
             Constraint::Length(button_height),
             Constraint::Length(sync_height),
             Constraint::Min(0),
-            Constraint::Length((footer_lines.len() as u16).max(1)),
+            Constraint::Length(footer_lines.len() as u16),
             Constraint::Length(activity_height),
         ])
         .areas(area);
@@ -2201,35 +2188,9 @@ impl App {
             self.zones.sync = Rect::default();
         }
         self.draw_list(frame, list);
-        let footer_empty = footer_lines.is_empty();
-        frame.render_widget(Paragraph::new(footer_lines), footer);
-        // Collapse button at the bottom-right of the last footer line,
-        // mirroring the explorer (and herdr's own sidebar).
-        let last_line = Rect::new(
-            footer.x,
-            footer.y + footer.height.saturating_sub(1),
-            footer.width,
-            1,
-        );
-        if footer_empty {
-            frame.render_widget(
-                Paragraph::new(Span::styled(
-                    " ctrl+rclick for menus",
-                    Style::default().dim().italic(),
-                )),
-                last_line,
-            );
+        if !footer_lines.is_empty() {
+            frame.render_widget(Paragraph::new(footer_lines), footer);
         }
-        let [_, footer_button] =
-            Layout::horizontal([Constraint::Min(0), Constraint::Length(3)]).areas(last_line);
-        frame.render_widget(
-            Paragraph::new(Span::styled(
-                "«",
-                Style::default().bold().fg(Color::LightBlue),
-            ))
-            .centered(),
-            footer_button,
-        );
 
         match self.overlay {
             Some(Overlay::Menu { .. }) => self.draw_menu(frame),
@@ -2644,7 +2605,7 @@ impl App {
             _ => None,
         };
         if let Some((msg, color)) = message {
-            return wrap_footer_message(&msg, width, 4)
+            return wrap_footer_message(&msg, width, 0)
                 .into_iter()
                 .map(|l| Line::styled(l, Style::default().fg(color)))
                 .collect();
