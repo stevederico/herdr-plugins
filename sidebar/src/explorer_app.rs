@@ -14,7 +14,7 @@ use herdr_sidebar::actions::{self, MenuAction, MenuEntry};
 use herdr_sidebar::icons::{IconTheme, icon};
 use herdr_sidebar::state::{self as sidebar, View};
 use herdr_sidebar::ui::{
-    TitleAction, ACTIVITY_BAR_ROWS, activity_icons, draw_scrollbar, gear_icon, hits,
+    TitleAction, draw_scrollbar, gear_icon, hits,
     popover_above,
     input_tail, sibling_panes_of, title_action_spans, title_actions_visible,
     title_actions_width, truncate_to, wrap_footer_message, wrap_hints,
@@ -140,7 +140,6 @@ enum Overlay {
 /// One row of the Settings modal.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Setting {
-    UnifiedSidebar,
     IconTheme,
     PreviewFull,
     HiddenFiles,
@@ -178,9 +177,7 @@ pub struct App {
     // Merged-sidebar state.
     sidebar_state: sidebar::State,
     other_exe: Option<std::path::PathBuf>,
-    activity: ActivityZones,
-    /// The ⚙ button's rect from the last draw (activity bar in unified mode,
-    /// header row otherwise).
+    /// The ⚙ button's rect from the last draw (header row).
     gear: Rect,
     /// The hover title-bar buttons' click zones from the last draw (empty
     /// while they are hidden).
@@ -201,24 +198,6 @@ pub struct App {
     /// When the user last re-rooted away from the agent cwd.
     /// Heartbeat follow waits until this is older than [`CWD_FOLLOW_HOLD`].
     cwd_follow_hold: Option<std::time::Instant>,
-}
-
-
-
-/// Activity-bar click zones from the last draw: the bar's row and the column
-/// ranges of the explorer / source-control icons.
-#[derive(Clone, Copy)]
-struct ActivityZones {
-    row: u16,
-    explorer: (u16, u16),
-    source_control: (u16, u16),
-}
-
-impl Default for ActivityZones {
-    fn default() -> Self {
-        // row = MAX: nothing hit-tests true before the first draw.
-        Self { row: u16::MAX, explorer: (0, 0), source_control: (0, 0) }
-    }
 }
 
 impl App {
@@ -257,7 +236,6 @@ impl App {
             notice,
             sidebar_state,
             other_exe,
-            activity: ActivityZones::default(),
             gear: Rect::default(),
             title_zones: Vec::new(),
             last_mouse: None,
@@ -391,6 +369,7 @@ impl App {
     /// close the other panel's standalone pane in this tab. Off: split the
     /// other view back out into its own pane. Deliberately silent — the
     /// layout change is its own feedback.
+    #[allow(dead_code)]
     fn set_unified(&mut self, on: bool) {
         if on == self.merged() || self.other_exe.is_none() {
             return;
@@ -413,6 +392,7 @@ impl App {
     }
 
     /// Hand the pane to the other view (the supervisor swaps processes).
+    #[allow(dead_code)]
     fn switch_to(&mut self, view: View) -> Option<Exit> {
         if !self.merged() || view == MY_VIEW {
             return None;
@@ -423,6 +403,7 @@ impl App {
     }
 
     /// Close the other panel's standalone pane in our tab, if one is open.
+    #[allow(dead_code)]
     fn close_other_standalone_pane(&self) {
         let Some(ctl) = &self.pane_ctl else { return };
         let Ok(json) = herdr_sidebar::ipc::call_text("pane.list", serde_json::json!({}))
@@ -436,6 +417,7 @@ impl App {
     }
 
     /// Open the other view in a fresh pane beside this one (detach).
+    #[allow(dead_code)]
     fn spawn_other_pane(&self) {
         let (Some(ctl), Some(exe)) = (&self.pane_ctl, &self.other_exe) else { return };
         // Grow to double width FIRST, then split 50/50 — each separated panel
@@ -525,8 +507,6 @@ impl App {
             KeyCode::Char('c') => self.change_folder_dialog(),
             KeyCode::Backspace | KeyCode::Char('u') => self.go_up(),
             KeyCode::Char('s') => self.open_settings(),
-            KeyCode::Char('1') => return self.switch_to(View::Explorer),
-            KeyCode::Char('2') => return self.switch_to(View::SourceControl),
             _ => {}
         }
         None
@@ -549,15 +529,6 @@ impl App {
             MouseEventKind::ScrollUp => self.scroll_view(-3),
             MouseEventKind::ScrollDown => self.scroll_view(3),
             MouseEventKind::Down(MouseButton::Left) => {
-                let zones = self.activity;
-                if self.merged() && mouse.row == zones.row {
-                    if (zones.explorer.0..zones.explorer.1).contains(&mouse.column) {
-                        return self.switch_to(View::Explorer);
-                    }
-                    if (zones.source_control.0..zones.source_control.1).contains(&mouse.column) {
-                        return self.switch_to(View::SourceControl);
-                    }
-                }
                 let g = self.gear;
                 if mouse.column >= g.x
                     && mouse.column < g.x + g.width
@@ -833,12 +804,6 @@ impl App {
     fn settings_rows(&self) -> Vec<SettingRow> {
         vec![
             (
-                Setting::UnifiedSidebar,
-                "Unified sidebar",
-                if self.merged() { "on" } else { "off" }.to_string(),
-                self.other_exe.is_some(),
-            ),
-            (
                 Setting::IconTheme,
                 "Icon theme",
                 match self.theme {
@@ -883,12 +848,6 @@ impl App {
             return;
         }
         match setting {
-            Setting::UnifiedSidebar => {
-                // The pane layout changes underneath the modal; close it.
-                self.overlay = None;
-                let on = !self.merged();
-                self.set_unified(on);
-            }
             Setting::IconTheme => self.set_theme(self.theme.toggled()),
             Setting::HiddenFiles => {
                 self.tree.show_hidden = !self.tree.show_hidden;
@@ -1283,21 +1242,14 @@ impl App {
         // the pane label ("Explorer"/"Sidebar") — a second border read as a
         // double frame.
         let footer_height = self.footer_height(frame.area().width);
-        // Docked at the bottom: a breathing row above and below the icons
-        // keeps the activity bar from crowding the pane border.
-        let activity_height = if self.merged() { ACTIVITY_BAR_ROWS } else { 0 };
-        let [header, body, footer, activity] = Layout::vertical([
+        let [header, body, footer] = Layout::vertical([
             Constraint::Length(1),
             Constraint::Min(0),
             Constraint::Length(footer_height),
-            Constraint::Length(activity_height),
         ])
         .areas(frame.area());
         self.page = body.height.saturating_sub(1).max(1) as usize;
 
-        if self.merged() {
-            self.draw_activity_bar(frame, activity);
-        }
         self.draw_header(frame, header);
 
         if self.rows.is_empty() {
@@ -1388,13 +1340,12 @@ impl App {
     }
 
     /// The workspace-name header (the root folder's name, uppercase like VS
-    /// Code); standalone mode puts the ⚙ at its right edge (unified mode's ⚙
-    /// lives in the activity bar instead), and the hover title-action buttons
-    /// sit just left of it.
+    /// Code); ⚙ at the right edge, hover title-action buttons sit just left of it.
     fn draw_header(&mut self, frame: &mut Frame, area: Rect) {
-        let gear = (!self.merged()).then(|| {
-            Span::styled(format!("{} ", gear_icon(self.theme)), Style::default().dim())
-        });
+        let gear = Some(Span::styled(
+            format!("{} ", gear_icon(self.theme)),
+            Style::default().dim(),
+        ));
         let gear_w = gear.as_ref().map(Span::width).unwrap_or(0) as u16;
         self.title_zones.clear();
         let (action_spans, actions_w) = if title_actions_visible(self.last_mouse) {
@@ -1454,7 +1405,7 @@ impl App {
 
     /// The hotkey hints for the current mode.
     fn hints(&self) -> Vec<(&'static str, &'static str)> {
-        let mut hints = vec![
+        let hints = vec![
             ("↑↓", "move"),
             ("←→", "fold"),
             ("⏎", "toggle"),
@@ -1466,9 +1417,6 @@ impl App {
             ("b", "hide"),
             ("q", "quit"),
         ];
-        if self.merged() {
-            hints.extend([("1", "files"), ("2", "git")]);
-        }
         hints
     }
 
@@ -1503,69 +1451,6 @@ impl App {
             return Some((format!("Delete '{name}' permanently? (y/N)"), Color::Red));
         }
         None
-    }
-
-    /// The VS Code activity bar: view-switcher icons plus a detach button.
-    /// The area is three rows tall; the outer rows stay in the pane
-    /// background, and only the ACTIVE icon's highlight chip extends into
-    /// them by a half block — a tall button with built-in breathing room,
-    /// no strip container.
-    fn draw_activity_bar(&mut self, frame: &mut Frame, area: Rect) {
-        let outer_top = area.y;
-        let outer_bottom = area.y + 2;
-        let area = Rect::new(area.x, area.y + 1, area.width, 1);
-        let (exp_icon, git_icon) = activity_icons(self.theme);
-        let active = |on: bool| {
-            if on {
-                Style::default().bg(Color::DarkGray).add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().dim()
-            }
-        };
-        // Both FA glyphs (folder, code-fork) render two cells wide in the
-        // non-Mono Nerd Font; reserve the second cell in each chip so the
-        // highlights are equal-sized with centered icons.
-        let slack = if self.theme == IconTheme::Material { " " } else { "" };
-        let spans = [
-            Span::raw(" "),
-            Span::styled(format!(" {exp_icon}{slack} "), active(true)),
-            Span::raw(" "),
-            Span::styled(format!(" {git_icon}{slack} "), active(false)),
-        ];
-        // Hit zones from the actual span widths (emoji vs nerd-glyph widths differ).
-        let mut x = area.x;
-        let mut bounds = Vec::new();
-        for span in &spans {
-            let w = span.width() as u16;
-            bounds.push((x, x + w));
-            x += w;
-        }
-        self.activity = ActivityZones {
-            row: area.y,
-            explorer: bounds[1],
-            source_control: bounds[3],
-        };
-        // Symmetric half-block caps: a 2-cell button with the icon in its
-        // vertical center.
-        let (chip_start, chip_end) = bounds[1];
-        let chip_w = chip_end.saturating_sub(chip_start);
-        let cap = |glyph: &str| {
-            Paragraph::new(glyph.repeat(usize::from(chip_w)))
-                .style(Style::default().fg(Color::DarkGray))
-        };
-        frame.render_widget(cap("▄"), Rect::new(chip_start, outer_top, chip_w, 1));
-        frame.render_widget(cap("▀"), Rect::new(chip_start, outer_bottom, chip_w, 1));
-        let gear = Span::styled(format!(" {} ", gear_icon(self.theme)), Style::default().dim());
-        let gear_w = gear.width() as u16;
-        let gear_x = area.x + area.width.saturating_sub(gear_w);
-        self.gear = Rect::new(gear_x, area.y, gear_w, 1);
-
-        let pad = usize::from(area.width)
-            .saturating_sub(spans.iter().map(Span::width).sum::<usize>() + usize::from(gear_w));
-        let mut line = spans.to_vec();
-        line.push(Span::raw(" ".repeat(pad)));
-        line.push(gear);
-        frame.render_widget(Paragraph::new(Line::from(line)), area);
     }
 
     /// Render the context-menu popup near its anchor, clamped inside the pane,

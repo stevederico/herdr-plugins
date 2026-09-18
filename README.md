@@ -61,7 +61,7 @@ Steve's local [herdr](https://herdr.dev) plugins in one repo. `herdr-sidebar` is
 - **Follows the agent cwd** so the tree tracks the Grok pane you are in
 - **Re-root** on double-click; parent up-arrow when macOS hides the listing
 - **Context menus** (right-click): new file, new folder, rename, delete, copy path, Open in Finder (macOS)
-- **Activity bar** switches Files (`1`) and Git (`2`) in process: no pane flash
+- **Gear** in the header (`s`) for icons, hidden files, preview, folder
 
 ### 👁️ **File Preview**
 - **Opens beside the agent** (agent | preview | explorer) so the tree keeps ~32 columns. One viewer per tab; clicks reuse it
@@ -89,7 +89,7 @@ Steve's local [herdr](https://herdr.dev) plugins in one repo. `herdr-sidebar` is
 
 | Dir | Plugin id | What |
 |-----|-----------|------|
-| `sidebar/` | `herdr-sidebar` | Explorer + SCM + preview (0.39.0) |
+| `sidebar/` | `herdr-sidebar` | Explorer + SCM + preview (0.40.0) |
 | `git-badge/` | `herdr-git-badge` | Folder `*` when dirty or unpushed |
 | `space-status/` | `herdr-space-status` | 🔨 working, ✅ done, ⚠️ blocked, ⚪ idle |
 | `space-title/` | `herdr-space-title` | Rename spaces from session titles |
@@ -143,7 +143,6 @@ Hotkey chips live in **Settings**. Footer chips are off by default.
 | `s` | settings |
 | `b` | hide sidebar |
 | `Esc` | close preview |
-| `1` / `2` | files / git (unified mode) |
 | right-click | context menu (Open in Finder on macOS) |
 | `q` | quit pane |
 
@@ -183,7 +182,6 @@ Gear in the sidebar header, or `s`.
 
 | Setting | Default | What |
 |---------|---------|------|
-| Unified sidebar | on | one pane, `1`/`2` switch views. Off: separate Explorer + Source Control |
 | Icon theme | material (auto) | Material Nerd Font or emoji |
 | Hidden files | hidden | dotfiles in the tree |
 | Footer hotkeys | hidden | chips under the tree |
@@ -242,7 +240,7 @@ Markdown preview is hand-rolled (`sidebar/src/md.rs`): no markdown crate. File f
 
 One `herdr-sidebar` binary, three roles:
 
-1. **Explorer / SCM TUI** to the right of the agent (unified, or `--view explorer|git`)
+1. **Explorer TUI** to the right of the agent (`--view git` still opens source control)
 2. **`--preview <ctl>`** on the far right: file contents, markdown, media, git diffs
 3. **`herdr-sidebar-ensure`** windowless sidecar for Windows hooks (no console flash)
 

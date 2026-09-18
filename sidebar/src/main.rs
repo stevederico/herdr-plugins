@@ -1,8 +1,6 @@
-//! herdr-sidebar — the VS Code sidebar for herdr: file explorer and source
-//! control in ONE binary. In unified mode both views share a pane and the
-//! activity bar switches between them IN PROCESS (instant, no flash); in
-//! separated mode the same binary runs one pane per view, pinned with
-//! `--view explorer|git`. `--preview <ctl>` runs the file-preview pane.
+//! herdr-sidebar — the VS Code sidebar for herdr: file explorer in the
+//! docked pane. Source control is a separate `--view git` pane. `--preview <ctl>`
+//! runs the file-preview pane.
 //! `--open-file <path>` opens a file in this tab's preview (agent helper).
 //!
 //! The `--*` stdin→stdout helper modes serve the launcher scripts — see
@@ -102,8 +100,8 @@ fn main() -> std::io::Result<()> {
         None => {}
     }
 
-    // Starting view: an explicit `--view` pin (separated panes), else the
-    // last-active view when the unified sidebar is on.
+    // Starting view: `--view git` for the separate source-control action;
+    // the sidebar pane is always the file tree.
     let pinned = if mode.as_deref() == Some("--view") {
         std::env::args()
             .nth(2)
@@ -113,11 +111,8 @@ fn main() -> std::io::Result<()> {
         None
     };
     let persisted = state::load_state();
-    let mut view = pinned.unwrap_or(if persisted.merged {
-        persisted.active
-    } else {
-        View::Explorer
-    });
+    #[allow(unused_mut)]
+    let mut view = pinned.unwrap_or(View::Explorer);
 
     // ONE terminal session for every view: switching drops the old view's
     // state and draws the other in the same alternate screen — instant, and

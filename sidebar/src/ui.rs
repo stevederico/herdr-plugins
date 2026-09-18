@@ -73,9 +73,6 @@ pub fn draw_scrollbar(frame: &mut Frame, area: Rect, total: usize, viewport: usi
     );
 }
 
-/// Rows the unified activity bar occupies (icon row + half-block caps).
-pub const ACTIVITY_BAR_ROWS: u16 = 3;
-
 /// Settings popover: sits above `anchor` (the ⚙), right-aligned to it,
 /// clamped inside `area`. Shrinks rather than covering the button.
 pub fn popover_above(area: Rect, anchor: Rect, width: u16, height: u16) -> Rect {
@@ -95,16 +92,6 @@ pub fn popover_above(area: Rect, anchor: Rect, width: u16, height: u16) -> Rect 
     };
     let x = right.saturating_sub(width).max(area.x);
     Rect::new(x, y, width, height)
-}
-
-/// Theme-matched activity-bar icons: (explorer, source control). Both FA
-/// glyphs render two cells wide in the non-Mono Nerd Font — chips reserve
-/// the second cell (see the activity-bar renderer).
-pub fn activity_icons(theme: IconTheme) -> (&'static str, &'static str) {
-    match theme {
-        IconTheme::Material => ("\u{f07b}", "\u{f126}"),
-        IconTheme::Emoji => ("📁", "🔀"),
-    }
 }
 
 /// Theme-matched ⚙ settings glyph.
@@ -175,10 +162,10 @@ pub fn title_action_icon(theme: IconTheme, action: TitleAction) -> &'static str 
 
 /// A button's rendered chip: one space each side, NO extra slack cell. The
 /// Mono Nerd Font build renders codicons in a single cell, so a trailing
-/// slack cell (as the activity bar uses) pushes the glyph's center left of
-/// the chip's — its right edge lands mid-chip (user-reported). In the
-/// non-Mono build the glyph just overflows into its own trailing space, which
-/// is how the tree's file icons already render.
+/// slack cell pushes the glyph's center left of the chip's — its right edge
+/// lands mid-chip (user-reported). In the non-Mono build the glyph just
+/// overflows into its own trailing space, which is how the tree's file icons
+/// already render.
 fn title_action_chip(theme: IconTheme, action: TitleAction) -> String {
     format!(" {} ", title_action_icon(theme, action))
 }

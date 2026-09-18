@@ -1,3 +1,7 @@
+0.40.0
+
+  Drop git activity tabs
+
 0.39.0
 
   Remove footer hide chrome
