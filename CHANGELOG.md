@@ -1,3 +1,7 @@
+0.43.0
+
+  Bake status emoji
+
 0.42.0
 
   Folder as title

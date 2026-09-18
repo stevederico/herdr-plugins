@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Copy the folder name onto the workspace label (title).
+# Copy status emoji + folder name onto the workspace label (title).
+# Baking the emoji into the label avoids Herdr's · between adjacent tokens.
 # Copy the Grok/agent session title onto $folder (subtitle).
 # Pin the live Grok session UUID on the workspace so `g` can resume it
 # after the pane process dies.
@@ -13,6 +14,13 @@ from pathlib import Path
 
 herdr = os.environ["HERDR_BIN"]
 SKIP = {"grok", "claude", "codex", "zsh", "bash", "fish", "nu"}
+STATUS_EMOJI = {
+    "working": "🔨",
+    "done": "✅",
+    "blocked": "⚠️",
+    "idle": "⚪",
+}
+IDLE_EMOJI = STATUS_EMOJI["idle"]
 SUF = re.compile(
     r"\s+[-–—]\s+(grok|claude|codex|opencode|gemini|cursor)\s*$",
     re.I,
@@ -37,6 +45,9 @@ def session_label(title: str | None) -> str | None:
     if len(t) > 42:
         t = t[:41].rstrip() + "…"
     return t
+
+def space_title(fold: str, status: str | None) -> str:
+    return f"{STATUS_EMOJI.get(status or '', IDLE_EMOJI)} {fold}"
 
 def folder_name(p: dict) -> str | None:
     cwd = p.get("foreground_cwd") or p.get("cwd")
@@ -170,6 +181,7 @@ def live_grok_sessions() -> dict[str, str]:
 panes = ((jcmd("pane", "list") or {}).get("result") or {}).get("panes") or []
 spaces = ((jcmd("workspace", "list") or {}).get("result") or {}).get("workspaces") or []
 labels = {w.get("workspace_id"): (w.get("label") or "") for w in spaces}
+statuses = {w.get("workspace_id"): w.get("agent_status") for w in spaces}
 cwds: dict[str, str] = {}
 for p in panes:
     wid = p.get("workspace_id")
@@ -210,10 +222,10 @@ for p in panes:
         best[wid] = lab
 
 for wid, fold in folders.items():
-    cur = labels.get(wid, "")
-    if fold and fold != cur:
+    lab = space_title(fold, statuses.get(wid))
+    if lab != labels.get(wid, ""):
         subprocess.run(
-            [herdr, "workspace", "rename", wid, fold],
+            [herdr, "workspace", "rename", wid, lab],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             check=False,
