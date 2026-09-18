@@ -64,7 +64,7 @@ Steve's local [herdr](https://herdr.dev) plugins in one repo. `herdr-sidebar` is
 - **Activity bar** switches Files (`1`) and Git (`2`) in process: no pane flash
 
 ### 👁️ **File Preview**
-- **Opens on the far right** (agent | explorer | preview). One viewer per tab; clicks reuse it
+- **Opens beside the agent** (agent | preview | explorer) so the tree keeps ~32 columns. One viewer per tab; clicks reuse it
 - **Live-reloads from disk** when an agent (or anything else) writes the open file. Markdown included. ~80ms
 - **Markdown** opens Rendered. Lines wrap to the pane. Click the chip for Raw. Type in Rendered to drop back into Raw. Click a box to toggle tasks
 - **Edit**: type, Ctrl+S to save, Ctrl+A / Ctrl+C to copy
@@ -89,7 +89,7 @@ Steve's local [herdr](https://herdr.dev) plugins in one repo. `herdr-sidebar` is
 
 | Dir | Plugin id | What |
 |-----|-----------|------|
-| `sidebar/` | `herdr-sidebar` | Explorer + SCM + preview (0.37.0) |
+| `sidebar/` | `herdr-sidebar` | Explorer + SCM + preview (0.38.0) |
 | `git-badge/` | `herdr-git-badge` | Folder `*` when dirty or unpushed |
 | `space-status/` | `herdr-space-status` | 🔨 working, ✅ done, ⚠️ blocked, ⚪ idle |
 | `space-title/` | `herdr-space-title` | Rename spaces from session titles |

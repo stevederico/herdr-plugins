@@ -392,6 +392,118 @@ pub fn default_split_ratio() -> f64 {
     DEFAULT_RATIO
 }
 
+/// Where to open a preview pane so the explorer keeps its ~32-col column.
+///
+/// - Explorer on the right of the agent: split the agent (no swap). Layout
+///   becomes `agent | preview | explorer`.
+/// - Explorer on the left of the agent: split the far-right pane (old path).
+/// - Explorer alone (full-size preview parked the rest): split ourselves
+///   with a large original share, then swap so the tree stays on the right
+///   (`preview | explorer`).
+pub struct PreviewSplit {
+    pub target: String,
+    pub ratio: f64,
+    pub swap: bool,
+}
+
+/// Plan a preview split from a `pane layout` JSON. `own_frac` is the
+/// explorer's share of the tab before parking (~0.15–0.3).
+pub fn preview_split_plan(
+    layout_json: &str,
+    my_pane_id: &str,
+    own_frac: f64,
+) -> PreviewSplit {
+    let share = own_frac.clamp(0.15, 0.5);
+    let fallback = PreviewSplit {
+        target: my_pane_id.to_string(),
+        ratio: 1.0 - share,
+        swap: true,
+    };
+    if !is_flag_safe(my_pane_id) {
+        return fallback;
+    }
+    let Ok(msg) = serde_json::from_str::<LayoutMsg>(strip_bom(layout_json)) else {
+        return fallback;
+    };
+    let panes = &msg.result.layout.panes;
+    let Some(mine) = panes
+        .iter()
+        .find(|p| p.pane_id.as_deref() == Some(my_pane_id))
+        .and_then(|p| p.rect.as_ref())
+    else {
+        return fallback;
+    };
+
+    let left = panes.iter().find_map(|p| {
+        let id = p.pane_id.as_deref()?;
+        let r = p.rect.as_ref()?;
+        if id == my_pane_id || !is_flag_safe(id) {
+            return None;
+        }
+        let beside = (r.x + r.width - mine.x).abs() <= 2;
+        let overlap_y = r.y < mine.y + mine.height.max(1) && mine.y < r.y + r.height.max(1);
+        if beside && overlap_y {
+            Some(id.to_string())
+        } else {
+            None
+        }
+    });
+    if let Some(target) = left {
+        return PreviewSplit {
+            target,
+            ratio: 0.5,
+            swap: false,
+        };
+    }
+
+    let rightmost = panes
+        .iter()
+        .filter_map(|p| {
+            let id = p.pane_id.as_deref()?;
+            let r = p.rect.as_ref()?;
+            is_flag_safe(id).then_some((id, r.x + r.width))
+        })
+        .max_by_key(|(_, right)| *right);
+    if let Some((id, _)) = rightmost
+        && id != my_pane_id
+    {
+        return PreviewSplit {
+            target: id.to_string(),
+            ratio: 0.5,
+            swap: false,
+        };
+    }
+    fallback
+}
+
+/// Root `layout.set_split_ratio` value that keeps `owner` at `frac` of the
+/// tab. Left-column explorer: `frac`. Right-column explorer: `1 - frac`.
+pub fn owner_root_ratio(layout_json: &str, owner: &str, frac: f64) -> f64 {
+    let frac = frac.clamp(0.1, 0.5);
+    let Ok(msg) = serde_json::from_str::<LayoutMsg>(strip_bom(layout_json)) else {
+        return frac;
+    };
+    let layout = &msg.result.layout;
+    let Some(area) = layout.area.as_ref() else {
+        return frac;
+    };
+    let Some(mine) = layout
+        .panes
+        .iter()
+        .find(|p| p.pane_id.as_deref() == Some(owner))
+        .and_then(|p| p.rect.as_ref())
+    else {
+        return frac;
+    };
+    let on_right = mine.x > area.x + 4
+        && mine.x + mine.width >= area.x + area.width - 2;
+    if on_right {
+        (1.0 - frac).clamp(0.5, 0.9)
+    } else {
+        frac
+    }
+}
+
 /// The focused pane's tab id from a `pane list` JSON (flag-safe, else empty).
 pub fn focused_tab(pane_list_json: &str) -> String {
     let Ok(msg) = serde_json::from_str::<PaneListMsg>(strip_bom(pane_list_json)) else {
@@ -927,6 +1039,50 @@ mod tests {
             r#"{"direction":"right","ratio":0.2,"rect":{"x":0,"y":0,"width":160,"height":50}}"#,
         );
         assert!(resize_plan(&json, "e", 30, 30).is_none());
+    }
+
+    #[test]
+    fn preview_split_plan_splits_agent_when_explorer_is_on_the_right() {
+        let json = layout(
+            r#"{"pane_id":"a","rect":{"x":0,"y":0,"width":192,"height":50}},
+               {"pane_id":"e","rect":{"x":192,"y":0,"width":32,"height":50}}"#,
+        );
+        let plan = preview_split_plan(&json, "e", 0.14);
+        assert_eq!(plan.target, "a");
+        assert!((plan.ratio - 0.5).abs() < 1e-9);
+        assert!(!plan.swap);
+    }
+
+    #[test]
+    fn preview_split_plan_splits_far_right_when_explorer_is_on_the_left() {
+        let json = layout(
+            r#"{"pane_id":"e","rect":{"x":0,"y":0,"width":32,"height":50}},
+               {"pane_id":"a","rect":{"x":32,"y":0,"width":192,"height":50}}"#,
+        );
+        let plan = preview_split_plan(&json, "e", 0.14);
+        assert_eq!(plan.target, "a");
+        assert!(!plan.swap);
+    }
+
+    #[test]
+    fn preview_split_plan_swaps_when_explorer_is_alone() {
+        let json = layout(r#"{"pane_id":"e","rect":{"x":0,"y":0,"width":224,"height":50}}"#);
+        let plan = preview_split_plan(&json, "e", 0.14);
+        assert_eq!(plan.target, "e");
+        assert!(plan.swap);
+        assert!((plan.ratio - 0.85).abs() < 1e-9); // 1 - 0.15 clamp
+    }
+
+    #[test]
+    fn owner_root_ratio_inverts_for_right_column() {
+        let json = format!(
+            r#"{{"id":"x","result":{{"layout":{{"area":{{"x":0,"y":0,"width":224,"height":50}},"panes":[{{"pane_id":"e","rect":{{"x":192,"y":0,"width":32,"height":50}}}}]}}}}}}"#
+        );
+        assert!((owner_root_ratio(&json, "e", 0.14) - 0.86).abs() < 1e-9);
+        let left = format!(
+            r#"{{"id":"x","result":{{"layout":{{"area":{{"x":0,"y":0,"width":224,"height":50}},"panes":[{{"pane_id":"e","rect":{{"x":0,"y":0,"width":32,"height":50}}}}]}}}}}}"#
+        );
+        assert!((owner_root_ratio(&left, "e", 0.14) - 0.14).abs() < 1e-9);
     }
 
     #[test]

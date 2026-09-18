@@ -1,3 +1,7 @@
+0.38.0
+
+  Keep tree width on preview
+
 0.37.0
 
   Dock explorer right of agent

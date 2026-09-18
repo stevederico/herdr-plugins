@@ -1892,13 +1892,17 @@ fn owner_frac(owner: &str) -> Option<f64> {
         .map(|f| f.max(0.1))
 }
 
-/// Pin the sidebar's width after the preview opens: in full mode the tab is
-/// sidebar | viewer, so the root split ratio IS the sidebar's share. Makes
-/// the width deterministic no matter which spawn path ran.
+/// Pin the sidebar's width after the preview opens. Left-column explorer:
+/// root ratio is the explorer share. Right-column: root ratio is 1 minus
+/// that share (the left pane, usually the preview, keeps the rest).
 fn enforce_owner_width(owner: &str, frac: f64) {
+    let ratio = ipc::call_text("pane.layout", serde_json::json!({ "pane_id": owner }))
+        .ok()
+        .map(|layout| crate::launch::owner_root_ratio(&layout, owner, frac))
+        .unwrap_or(frac);
     let _ = ipc::call_text(
         "layout.set_split_ratio",
-        serde_json::json!({ "pane_id": owner, "path": [], "ratio": frac }),
+        serde_json::json!({ "pane_id": owner, "path": [], "ratio": ratio }),
     );
 }
 
@@ -1974,24 +1978,24 @@ fn spawn_command_pane(
     focus_new: bool,
 ) -> Result<(), String> {
     let layout = ipc::call_text("pane.layout", serde_json::json!({ "pane_id": my_pane_id })).ok();
-    // Far-right preview: agent | explorer | preview. Split the actual
-    // rightmost pane (often the explorer itself when it docks right of the
-    // agent). Splitting anyone else sandwiches preview between agent and tree.
-    let rightmost = layout.as_deref().and_then(rightmost_pane);
-    // Splitting ourselves (we are already the far edge, or everything else
-    // just parked leaving us full-width): keep the width the sidebar had
-    // BEFORE the park, not a ballooned 30-50%.
+    // Keep the explorer's ~32-col column. Right-docked: split the agent so
+    // preview takes agent space (`agent | preview | explorer`). Alone after
+    // a full-size park: split ourselves and swap (`preview | explorer`).
     let own_frac = pre_park_frac.unwrap_or(0.3);
-    let (target, ratio) = match &rightmost {
-        Some(id) if id != my_pane_id => (id.clone(), 0.5),
-        _ => (my_pane_id.to_string(), own_frac),
-    };
+    let plan = layout
+        .as_deref()
+        .map(|json| crate::launch::preview_split_plan(json, my_pane_id, own_frac))
+        .unwrap_or_else(|| crate::launch::PreviewSplit {
+            target: my_pane_id.to_string(),
+            ratio: 1.0 - own_frac.clamp(0.15, 0.5),
+            swap: true,
+        });
     let response = ipc::call_text(
         "pane.split",
         serde_json::json!({
-            "target_pane_id": target,
+            "target_pane_id": plan.target,
             "direction": "right",
-            "ratio": ratio,
+            "ratio": plan.ratio,
             "focus": false,
             "cwd": spawn_cwd.display().to_string(),
             "env": crate::state::spawn_env(),
@@ -2001,6 +2005,15 @@ fn spawn_command_pane(
         .ok()
         .and_then(|r| crate::launch::split_pane_id(&r))
         .ok_or_else(|| "preview pane failed to open".to_string())?;
+    if plan.swap {
+        let _ = ipc::call_text(
+            "pane.swap",
+            serde_json::json!({
+                "source_pane_id": new_pane,
+                "target_pane_id": plan.target,
+            }),
+        );
+    }
     let _ = ipc::call_text(
         "pane.send_input",
         serde_json::json!({ "pane_id": new_pane, "text": command, "keys": ["Enter"] }),
@@ -2027,8 +2040,8 @@ fn spawn_command_pane(
     Ok(())
 }
 
-/// Split a viewer pane on the far right of the tab so the layout reads
-/// agent | explorer | preview (not agent | preview | explorer).
+/// Split a viewer pane so the explorer keeps its column: agent | preview |
+/// explorer when the tree is right-docked.
 fn spawn_viewer_pane(
     my_pane_id: &str,
     spawn_cwd: &Path,
@@ -2438,44 +2451,6 @@ fn move_into(tab: &str, pane: &str, target: &str, split: &str, ratio: f64) {
     );
 }
 
-/// The rightmost pane in this layout. Used to dock preview on the far right
-/// (agent | explorer | preview).
-fn rightmost_pane(layout_json: &str) -> Option<String> {
-    #[derive(serde::Deserialize)]
-    struct Msg {
-        result: Res,
-    }
-    #[derive(serde::Deserialize)]
-    struct Res {
-        layout: L,
-    }
-    #[derive(serde::Deserialize)]
-    struct L {
-        #[serde(default)]
-        panes: Vec<P>,
-    }
-    #[derive(serde::Deserialize)]
-    struct P {
-        pane_id: Option<String>,
-        rect: Option<R>,
-    }
-    #[derive(serde::Deserialize)]
-    struct R {
-        x: i64,
-        y: i64,
-        width: i64,
-        height: i64,
-    }
-    let msg: Msg = serde_json::from_str(layout_json.trim_start_matches('\u{feff}')).ok()?;
-    msg.result
-        .layout
-        .panes
-        .iter()
-        .filter_map(|p| Some((p.pane_id.clone()?, p.rect.as_ref()?)))
-        .max_by_key(|(_, r)| (r.x + r.width, r.height, -r.y))
-        .map(|(id, _)| id)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2691,17 +2666,4 @@ mod tests {
         );
     }
 
-    #[test]
-    fn rightmost_pane_picks_far_edge() {
-        let json = r#"{"result":{"layout":{"panes":[
-            {"pane_id":"w1:p1","rect":{"x":0,"y":0,"width":20,"height":40}},
-            {"pane_id":"w1:p2","rect":{"x":20,"y":0,"width":50,"height":40}},
-            {"pane_id":"w1:p3","rect":{"x":70,"y":0,"width":30,"height":40}}
-        ]}}}"#;
-        assert_eq!(rightmost_pane(json).as_deref(), Some("w1:p3"));
-        assert_eq!(
-            rightmost_pane(r#"{"result":{"layout":{"panes":[]}}}"#),
-            None
-        );
-    }
 }
