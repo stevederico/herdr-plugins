@@ -1,7 +1,7 @@
 id = "herdr-space-title"
 name = "herdr-space-title"
-version = "0.1.0"
-description = "Rename spaces from the Grok/agent session title"
+version = "0.2.0"
+description = "Rename spaces from the Grok/agent session title; pin grok session UUID"
 min_herdr_version = "0.7.0"
 platforms = ["linux", "macos"]
 

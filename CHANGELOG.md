@@ -1,3 +1,7 @@
+0.36.0
+
+  Pin grok session UUID
+
 0.35.0
 
   Document prefix+f toggle
