@@ -1,3 +1,7 @@
+0.44.0
+
+  Document grok-resume command
+
 0.43.0
 
   Bake status emoji

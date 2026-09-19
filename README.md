@@ -80,7 +80,7 @@ Steve's local [herdr](https://herdr.dev) plugins in one repo. `herdr-sidebar` is
 ### 🧩 **Workspace helpers**
 - **git-badge** puts `*` next to the folder name when the worktree is dirty or unpushed
 - **space-status** puts 🔨 / ✅ / ⚠️ / ⚪ on spaces (working, done, blocked, idle)
-- **space-title** names spaces from the status emoji plus folder and puts the Grok/agent session title on the subtitle. Pins the Grok session UUID (`g` resumes it after a pane reset)
+- **space-title** names spaces from the status emoji plus folder and puts the Grok/agent session title on the subtitle. Pins the Grok session UUID (`grok-resume` resumes it after a pane reset)
 - **explorer** is a thin leftover file tree. Keep it disabled if you run the sidebar
 
 <br />
