@@ -144,6 +144,88 @@ impl Tree {
         out
     }
 
+    /// Rows with directories expanded only as needed to reveal names that
+    /// contain `query` (case-insensitive). Empty query uses the normal walk.
+    pub fn filtered_rows(&mut self, query: &str) -> Vec<Row> {
+        let needle = query.trim().to_lowercase();
+        if needle.is_empty() {
+            return self.rows();
+        }
+        let mut out = Vec::new();
+        let root = self.root.clone();
+        self.walk_filter(&root, 0, &needle, &mut out);
+        out
+    }
+
+    /// Matching files, matching folders (plus immediate children), and the
+    /// ancestor folders of matches. Returns whether anything was pushed.
+    fn walk_filter(&mut self, dir: &Path, depth: usize, needle: &str, out: &mut Vec<Row>) -> bool {
+        let show_hidden = self.show_hidden;
+        let mut any = false;
+        let children = self.children(dir);
+        for entry in children {
+            if !visible(&entry.name, show_hidden) {
+                continue;
+            }
+            let path = dir.join(&entry.name);
+            let name_hit = name_matches(&entry.name, needle);
+            if entry.is_dir {
+                let start = out.len();
+                out.push(Row {
+                    name: entry.name,
+                    is_dir: true,
+                    depth,
+                    expanded: true,
+                    path: path.clone(),
+                });
+                let child_hit = if name_hit {
+                    self.push_match_children(&path, depth + 1, out);
+                    true
+                } else {
+                    self.walk_filter(&path, depth + 1, needle, out)
+                };
+                if child_hit {
+                    any = true;
+                } else {
+                    out.truncate(start);
+                }
+            } else if name_hit {
+                out.push(Row {
+                    name: entry.name,
+                    is_dir: false,
+                    depth,
+                    expanded: false,
+                    path,
+                });
+                any = true;
+            }
+        }
+        any
+    }
+
+    /// Immediate children of a name-matching folder. Nested directories the
+    /// user has expanded keep their usual walk so filter mode can still drill.
+    fn push_match_children(&mut self, dir: &Path, depth: usize, out: &mut Vec<Row>) {
+        let show_hidden = self.show_hidden;
+        for entry in self.children(dir) {
+            if !visible(&entry.name, show_hidden) {
+                continue;
+            }
+            let path = dir.join(&entry.name);
+            let expanded = entry.is_dir && self.is_expanded(&path);
+            out.push(Row {
+                name: entry.name,
+                is_dir: entry.is_dir,
+                depth,
+                expanded,
+                path: path.clone(),
+            });
+            if expanded {
+                self.walk(&path, depth + 1, out);
+            }
+        }
+    }
+
     fn walk(&mut self, dir: &Path, depth: usize, out: &mut Vec<Row>) {
         let show_hidden = self.show_hidden;
         for entry in self.children(dir) {
@@ -179,6 +261,11 @@ pub fn sort_entries(entries: &mut [Entry]) {
 /// `.git` is always hidden; other dotfiles only when `show_hidden` is off.
 fn visible(name: &str, show_hidden: bool) -> bool {
     name != ".git" && (show_hidden || !name.starts_with('.'))
+}
+
+/// Case-insensitive substring match; `needle` is already lowercased.
+fn name_matches(name: &str, needle: &str) -> bool {
+    !needle.is_empty() && name.to_lowercase().contains(needle)
 }
 
 /// Follows symlinks so a linked project folder is still a folder.
@@ -217,7 +304,8 @@ mod tests {
 
     impl TempDir {
         fn new(tag: &str) -> Self {
-            let path = std::env::temp_dir().join(format!("aa-filetree-{}-{tag}", std::process::id()));
+            let path =
+                std::env::temp_dir().join(format!("aa-filetree-{}-{tag}", std::process::id()));
             let _ = fs::remove_dir_all(&path);
             fs::create_dir_all(&path).unwrap();
             Self(path)
@@ -368,5 +456,75 @@ mod tests {
         let tmp = TempDir::new("rootname");
         let tree = Tree::new(tmp.0.clone());
         assert!(tree.root_name().starts_with("aa-filetree-"));
+    }
+
+    #[test]
+    fn filter_keeps_ancestors_and_hides_non_matches() {
+        let tmp = TempDir::new("filter");
+        tmp.mkdir("src");
+        tmp.touch("src/main.rs");
+        tmp.touch("src/lib.rs");
+        tmp.touch("README.md");
+        tmp.mkdir("docs");
+        tmp.touch("docs/guide.md");
+        let mut tree = Tree::new(tmp.0.clone());
+
+        assert_eq!(
+            names(&tree.filtered_rows("main")),
+            vec![("src".into(), 0), ("main.rs".into(), 1)]
+        );
+        assert!(tree.filtered_rows("main")[0].expanded);
+
+        let found = names(&tree.filtered_rows("md"));
+        assert!(found.contains(&("README.md".into(), 0)));
+        assert!(found.contains(&("docs".into(), 0)));
+        assert!(found.contains(&("guide.md".into(), 1)));
+        assert!(!found.iter().any(|(n, _)| n == "src"));
+    }
+
+    #[test]
+    fn filter_matching_folder_shows_immediate_children() {
+        let tmp = TempDir::new("filter-dir");
+        tmp.mkdir("src");
+        tmp.touch("src/main.rs");
+        tmp.touch("README.md");
+        let mut tree = Tree::new(tmp.0.clone());
+        assert_eq!(
+            names(&tree.filtered_rows("src")),
+            vec![("src".into(), 0), ("main.rs".into(), 1)]
+        );
+    }
+
+    #[test]
+    fn filter_is_case_insensitive_and_empty_matches_rows() {
+        let tmp = TempDir::new("filter-case");
+        tmp.touch("Cargo.toml");
+        tmp.mkdir("src");
+        let mut tree = Tree::new(tmp.0.clone());
+        assert_eq!(
+            names(&tree.filtered_rows("cargo")),
+            vec![("Cargo.toml".into(), 0)]
+        );
+        assert_eq!(names(&tree.filtered_rows("")), names(&tree.rows()));
+        assert_eq!(names(&tree.filtered_rows("   ")), names(&tree.rows()));
+    }
+
+    #[test]
+    fn filter_expanded_child_under_matching_folder_still_drills() {
+        let tmp = TempDir::new("filter-drill");
+        tmp.mkdir("src/widgets");
+        tmp.touch("src/widgets/mod.rs");
+        tmp.touch("src/main.rs");
+        let mut tree = Tree::new(tmp.0.clone());
+        tree.expand(&tmp.0.join("src/widgets"));
+        assert_eq!(
+            names(&tree.filtered_rows("src")),
+            vec![
+                ("src".into(), 0),
+                ("widgets".into(), 1),
+                ("mod.rs".into(), 2),
+                ("main.rs".into(), 1),
+            ]
+        );
     }
 }

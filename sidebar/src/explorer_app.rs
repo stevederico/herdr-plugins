@@ -1,25 +1,26 @@
 //! TUI state and rendering: a VS Code Explorer-style tree with disclosure arrows,
-//! nested indentation, per-file-type icons, and `b` to hide the pane.
+//! nested indentation, per-file-type icons, a live filter box, and `b` to hide the pane.
 
 use std::path::{Path, PathBuf};
 
-use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, MouseButton, MouseEvent, MouseEventKind};
-use ratatui::Frame;
+use crossterm::event::{
+    KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+};
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, List, ListItem, Paragraph};
+use ratatui::Frame;
 
 use herdr_sidebar::actions::{self, MenuAction, MenuEntry};
-use herdr_sidebar::icons::{IconTheme, icon};
+use herdr_sidebar::icons::{icon, IconTheme};
 use herdr_sidebar::state::{self as sidebar, View};
-use herdr_sidebar::ui::{
-    TitleAction, draw_scrollbar, gear_icon, hits,
-    popover_for_anchor,
-    input_tail, sibling_panes_of, title_action_spans, title_actions_visible,
-    title_actions_width, truncate_to, wrap_footer_message, wrap_hints,
-};
 use herdr_sidebar::tree::{Row, Tree};
+use herdr_sidebar::ui::{
+    draw_scrollbar, gear_icon, hits, input_tail, popover_for_anchor, sibling_panes_of,
+    title_action_spans, title_actions_visible, title_actions_width, truncate_to,
+    wrap_footer_message, wrap_hints, TitleAction,
+};
 
 use herdr_sidebar::state::Exit;
 
@@ -39,7 +40,9 @@ struct PaneCtl {
 
 impl PaneCtl {
     fn from_env() -> Option<Self> {
-        let pane_id = std::env::var("HERDR_PANE_ID").ok().filter(|id| !id.is_empty())?;
+        let pane_id = std::env::var("HERDR_PANE_ID")
+            .ok()
+            .filter(|id| !id.is_empty())?;
         Some(Self { pane_id })
     }
 
@@ -174,6 +177,12 @@ pub struct App {
     overlay: Option<Overlay>,
     /// Transient status/error line shown in the footer until the next action.
     notice: Option<String>,
+    /// Live filename filter. Empty shows the normal tree.
+    filter: String,
+    /// Keys go to the filter box instead of explorer hotkeys.
+    filter_focused: bool,
+    /// Filter row rect from the last draw, for click-to-focus.
+    filter_rect: Rect,
     // Merged-sidebar state.
     sidebar_state: sidebar::State,
     other_exe: Option<std::path::PathBuf>,
@@ -216,7 +225,8 @@ impl App {
         let other_exe = std::env::current_exe().ok();
         let sidebar_state = sidebar::load_state();
         let notice = if rows.is_empty() {
-            tree.list_error().map(|e| format!("can't list this folder: {e}"))
+            tree.list_error()
+                .map(|e| format!("can't list this folder: {e}"))
         } else {
             None
         };
@@ -234,6 +244,9 @@ impl App {
             body: BodyGeom::default(),
             overlay: None,
             notice,
+            filter: String::new(),
+            filter_focused: false,
+            filter_rect: Rect::default(),
             sidebar_state,
             other_exe,
             gear: Rect::default(),
@@ -269,7 +282,7 @@ impl App {
     /// cwd). Leave the user alone if they drilled into a subfolder, or if
     /// they re-rooted less than [`CWD_FOLLOW_HOLD`] ago.
     pub fn follow_agent_cwd(&mut self) {
-        if self.overlay.is_some() {
+        if self.overlay.is_some() || self.filter_focused || !self.filter.is_empty() {
             return;
         }
         let Some(id) = self.pane_ctl.as_ref().map(|c| c.pane_id.as_str()) else {
@@ -337,11 +350,9 @@ impl App {
             return;
         };
         let payload = herdr_sidebar::viewer::file_request(path);
-        if let Err(e) = herdr_sidebar::viewer::open_in_pane(
-            &pane_id,
-            &self.tree.root_path(),
-            &payload,
-        ) {
+        if let Err(e) =
+            herdr_sidebar::viewer::open_in_pane(&pane_id, &self.tree.root_path(), &payload)
+        {
             self.notice = Some(e);
         }
     }
@@ -351,9 +362,7 @@ impl App {
     /// prefix+b keybinding (→ the toggle action) brings it back.
     fn hide(&mut self) {
         let Some(ctl) = &self.pane_ctl else { return };
-        if let Ok(json) =
-            herdr_sidebar::ipc::call_text("pane.list", serde_json::json!({}))
-        {
+        if let Ok(json) = herdr_sidebar::ipc::call_text("pane.list", serde_json::json!({})) {
             let tab = herdr_sidebar::launch::tab_of(&json, &ctl.pane_id);
             herdr_sidebar::snooze::set(&herdr_sidebar::snooze::dir(), &tab);
         }
@@ -374,8 +383,11 @@ impl App {
         if on == self.merged() || self.other_exe.is_none() {
             return;
         }
-        self.sidebar_state =
-            sidebar::State { merged: on, active: MY_VIEW, ..self.sidebar_state };
+        self.sidebar_state = sidebar::State {
+            merged: on,
+            active: MY_VIEW,
+            ..self.sidebar_state
+        };
         sidebar::save_state(self.sidebar_state);
         self.apply_identity();
         if on {
@@ -406,8 +418,7 @@ impl App {
     #[allow(dead_code)]
     fn close_other_standalone_pane(&self) {
         let Some(ctl) = &self.pane_ctl else { return };
-        let Ok(json) = herdr_sidebar::ipc::call_text("pane.list", serde_json::json!({}))
-        else {
+        let Ok(json) = herdr_sidebar::ipc::call_text("pane.list", serde_json::json!({})) else {
             return;
         };
         for id in sibling_panes_of(&json, &ctl.pane_id, MY_VIEW.other()) {
@@ -419,10 +430,15 @@ impl App {
     /// Open the other view in a fresh pane beside this one (detach).
     #[allow(dead_code)]
     fn spawn_other_pane(&self) {
-        let (Some(ctl), Some(exe)) = (&self.pane_ctl, &self.other_exe) else { return };
+        let (Some(ctl), Some(exe)) = (&self.pane_ctl, &self.other_exe) else {
+            return;
+        };
         // Grow to double width FIRST, then split 50/50 — each separated panel
         // keeps the width the unified sidebar had, instead of halving.
-        ctl.resize_to(self.last_width, self.last_width.saturating_mul(2).saturating_add(1));
+        ctl.resize_to(
+            self.last_width,
+            self.last_width.saturating_mul(2).saturating_add(1),
+        );
         let response = herdr_sidebar::ipc::call_text(
             "pane.split",
             serde_json::json!({
@@ -434,8 +450,9 @@ impl App {
                 "env": sidebar::spawn_env(),
             }),
         );
-        let Some(new_pane) =
-            response.ok().and_then(|r| herdr_sidebar::launch::split_pane_id(&r))
+        let Some(new_pane) = response
+            .ok()
+            .and_then(|r| herdr_sidebar::launch::split_pane_id(&r))
         else {
             return;
         };
@@ -468,7 +485,7 @@ impl App {
                 | KeyCode::End
                 | KeyCode::Char('j' | 'k' | 'h' | 'l' | 'g' | 'G')
         );
-        if key.kind == KeyEventKind::Repeat && !nav {
+        if key.kind == KeyEventKind::Repeat && !nav && !self.filter_focused {
             return None;
         }
         if key.kind != KeyEventKind::Press && key.kind != KeyEventKind::Repeat {
@@ -481,9 +498,16 @@ impl App {
             self.overlay_key(key);
             return None;
         }
+        if self.filter_focused {
+            self.filter_key(key);
+            return None;
+        }
         match key.code {
             KeyCode::Char('q') => return Some(Exit::Quit),
+            KeyCode::Char('/') => self.focus_filter(),
             // Esc never quits the sidebar — it closes the preview instead.
+            // A live filter clears first so Esc is "back out of search".
+            KeyCode::Esc if !self.filter.is_empty() => self.clear_filter(),
             KeyCode::Esc => self.close_preview(),
             KeyCode::Up | KeyCode::Char('k') => self.move_by(-1),
             KeyCode::Down | KeyCode::Char('j') => self.move_by(1),
@@ -512,6 +536,86 @@ impl App {
         None
     }
 
+    fn focus_filter(&mut self) {
+        self.filter_focused = true;
+    }
+
+    fn clear_filter(&mut self) {
+        if self.filter.is_empty() {
+            self.filter_focused = false;
+            return;
+        }
+        self.filter.clear();
+        self.filter_focused = false;
+        self.rebuild();
+    }
+
+    /// Keys while the filter box is focused. Printable chars edit the query
+    /// and rebuild immediately; arrows still move the tree.
+    fn filter_key(&mut self, key: KeyEvent) {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        match key.code {
+            KeyCode::Esc => {
+                if self.filter.is_empty() {
+                    self.filter_focused = false;
+                } else {
+                    self.filter.clear();
+                    self.rebuild();
+                }
+            }
+            KeyCode::Tab => self.filter_focused = false,
+            KeyCode::Enter => self.toggle(),
+            KeyCode::Backspace => {
+                self.filter.pop();
+                self.apply_filter();
+            }
+            KeyCode::Char('u') if ctrl => {
+                self.filter.clear();
+                self.apply_filter();
+            }
+            KeyCode::Char('w') if ctrl => {
+                let trimmed = self.filter.trim_end();
+                let cut = trimmed
+                    .rfind(char::is_whitespace)
+                    .map(|i| i + 1)
+                    .unwrap_or(0);
+                self.filter.truncate(cut);
+                self.apply_filter();
+            }
+            KeyCode::Char(c)
+                if !key.modifiers.intersects(
+                    KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER,
+                ) =>
+            {
+                self.filter.push(c);
+                self.apply_filter();
+            }
+            KeyCode::Up => self.move_by(-1),
+            KeyCode::Down => self.move_by(1),
+            KeyCode::PageUp => self.move_by(-(self.page as isize)),
+            KeyCode::PageDown => self.move_by(self.page as isize),
+            KeyCode::Home => self.select(0),
+            KeyCode::End => self.select(self.rows.len().saturating_sub(1)),
+            KeyCode::Right => self.expand_or_enter(),
+            KeyCode::Left => self.collapse_or_parent(),
+            _ => {}
+        }
+    }
+
+    fn apply_filter(&mut self) {
+        let keep = self.selected_row().map(|r| r.path.clone());
+        self.rebuild();
+        if self.rows.is_empty() {
+            return;
+        }
+        let still = keep
+            .as_ref()
+            .is_some_and(|p| self.rows.iter().any(|r| r.path == *p));
+        if !still {
+            self.select(0);
+        }
+    }
+
     /// `Some(exit)` ends the event loop, mirroring on_key.
     pub fn on_mouse(&mut self, mouse: MouseEvent) -> Option<Exit> {
         // Any mouse activity = "the mouse is over this pane": it shows the
@@ -535,6 +639,7 @@ impl App {
                     && mouse.row >= g.y
                     && mouse.row < g.y + g.height
                 {
+                    self.filter_focused = false;
                     self.open_settings();
                     return None;
                 }
@@ -543,9 +648,15 @@ impl App {
                     .iter()
                     .find(|(rect, _)| hits(*rect, mouse.column, mouse.row))
                 {
+                    self.filter_focused = false;
                     self.title_action(action);
                     return None;
                 }
+                if hits(self.filter_rect, mouse.column, mouse.row) {
+                    self.focus_filter();
+                    return None;
+                }
+                self.filter_focused = false;
                 let index = self.row_at(mouse.row)?;
                 self.select(index);
                 let row = &self.rows[index];
@@ -595,17 +706,23 @@ impl App {
     /// The title-bar New File / New Folder buttons: prompt for a name,
     /// creating in the VS Code target (see [`create_target_dir`]).
     fn open_create_prompt(&mut self, folder: bool) {
+        self.filter_focused = false;
         let dir = create_target_dir(self.selected_row(), self.tree.root_path());
         self.overlay = Some(Overlay::Prompt {
             title: if folder { "New folder" } else { "New file" }.into(),
             input: String::new(),
-            kind: if folder { PromptKind::NewFolder(dir) } else { PromptKind::NewFile(dir) },
+            kind: if folder {
+                PromptKind::NewFolder(dir)
+            } else {
+                PromptKind::NewFile(dir)
+            },
         });
     }
 
     /// Open the file context menu at the click position, targeting the row
     /// under the cursor (or the workspace root on empty space).
     fn open_context_menu(&mut self, x: u16, y: u16) {
+        self.filter_focused = false;
         let target = self.row_at(y).map(|index| {
             self.select(index);
             let row = &self.rows[index];
@@ -650,7 +767,9 @@ impl App {
                 KeyCode::Enter | KeyCode::Char(' ') => Cmd::ToggleSetting(*selected),
                 _ => Cmd::Nothing,
             },
-            Some(Overlay::Menu { entries, selected, .. }) => match key.code {
+            Some(Overlay::Menu {
+                entries, selected, ..
+            }) => match key.code {
                 KeyCode::Esc => Cmd::Close,
                 KeyCode::Up | KeyCode::Char('k') => {
                     *selected = step_menu(entries, *selected, -1);
@@ -746,7 +865,12 @@ impl App {
                     _ => Cmd::Nothing,
                 }
             }
-            Some(Overlay::Menu { entries, selected, rect, .. }) => {
+            Some(Overlay::Menu {
+                entries,
+                selected,
+                rect,
+                ..
+            }) => {
                 let inner = rect.inner(ratatui::layout::Margin::new(1, 1));
                 let item_at = |row: u16, col: u16| -> Option<usize> {
                     (col >= inner.x
@@ -797,7 +921,11 @@ impl App {
     // ---- Settings modal ----
 
     fn open_settings(&mut self) {
-        self.overlay = Some(Overlay::Settings { selected: 0, rect: Rect::default() });
+        self.filter_focused = false;
+        self.overlay = Some(Overlay::Settings {
+            selected: 0,
+            rect: Rect::default(),
+        });
     }
 
     /// The modal's rows for the current state.
@@ -816,19 +944,34 @@ impl App {
             (
                 Setting::HiddenFiles,
                 "Hidden files",
-                if self.tree.show_hidden { "shown" } else { "hidden" }.to_string(),
+                if self.tree.show_hidden {
+                    "shown"
+                } else {
+                    "hidden"
+                }
+                .to_string(),
                 true,
             ),
             (
                 Setting::Hotkeys,
                 "Footer hotkeys",
-                if self.show_hotkeys() { "shown" } else { "hidden" }.to_string(),
+                if self.show_hotkeys() {
+                    "shown"
+                } else {
+                    "hidden"
+                }
+                .to_string(),
                 true,
             ),
             (
                 Setting::PreviewFull,
                 "Full-size preview",
-                if self.sidebar_state.preview_full { "on" } else { "off" }.to_string(),
+                if self.sidebar_state.preview_full {
+                    "on"
+                } else {
+                    "off"
+                }
+                .to_string(),
                 true,
             ),
             (
@@ -891,14 +1034,19 @@ impl App {
             let style = if !enabled {
                 Style::default().dim()
             } else if i == *selected {
-                Style::default().bg(Color::DarkGray).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .bg(Color::DarkGray)
+                    .add_modifier(Modifier::BOLD)
             } else {
                 Style::default()
             };
             lines.push(Line::styled(text, style));
         }
         lines.push(Line::default());
-        lines.push(Line::from(Span::styled(" Hotkeys", Style::default().bold())));
+        lines.push(Line::from(Span::styled(
+            " Hotkeys",
+            Style::default().bold(),
+        )));
         lines.extend(hint_lines);
         lines.push(Line::from(" click/⏎ toggle · esc close".dim()));
 
@@ -914,16 +1062,25 @@ impl App {
     }
 
     fn activate_menu_entry(&mut self) {
-        let Some(Overlay::Menu { target, entries, selected, .. }) = self.overlay.take() else {
+        let Some(Overlay::Menu {
+            target,
+            entries,
+            selected,
+            ..
+        }) = self.overlay.take()
+        else {
             return;
         };
-        let MenuEntry::Action(action, _) = entries[selected] else { return };
+        let MenuEntry::Action(action, _) = entries[selected] else {
+            return;
+        };
         // Creation targets: the folder itself, a file's parent, or the root.
         let create_dir = match &target {
             Some((path, true)) => path.clone(),
-            Some((path, false)) => {
-                path.parent().map(Path::to_path_buf).unwrap_or_else(|| self.tree.root_path())
-            }
+            Some((path, false)) => path
+                .parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| self.tree.root_path()),
             None => self.tree.root_path(),
         };
         match action {
@@ -973,7 +1130,9 @@ impl App {
                 self.overlay = Some(Overlay::ConfirmDelete { path, is_dir });
             }
             MenuAction::Reveal => {
-                let path = target.map(|(p, _)| p).unwrap_or_else(|| self.tree.root_path());
+                let path = target
+                    .map(|(p, _)| p)
+                    .unwrap_or_else(|| self.tree.root_path());
                 actions::reveal(&path);
             }
             MenuAction::ChangeFolder => self.change_folder_prompt(),
@@ -1007,6 +1166,7 @@ impl App {
     /// `c` / the context menu: prompt for a new root folder, prefilled with
     /// the current one so relative tweaks are quick.
     fn change_folder_prompt(&mut self) {
+        self.filter_focused = false;
         self.overlay = Some(Overlay::Prompt {
             title: "Folder".into(),
             input: self.tree.root_path().display().to_string(),
@@ -1051,8 +1211,11 @@ impl App {
             None => raw.to_string(),
         };
         let target = PathBuf::from(&expanded);
-        let target =
-            if target.is_relative() { self.tree.root_path().join(target) } else { target };
+        let target = if target.is_relative() {
+            self.tree.root_path().join(target)
+        } else {
+            target
+        };
         if !target.is_dir() || std::env::set_current_dir(&target).is_err() {
             self.notice = Some(format!("not a folder: {raw}"));
             return;
@@ -1074,16 +1237,15 @@ impl App {
                 self.notice = Some("macOS hid other items here".into());
             }
         }
-        if self.notice.is_none() {
-            self.notice = Some(format!("folder: {}", self.tree.root_name()));
-        }
         if hold {
             self.cwd_follow_hold = Some(std::time::Instant::now());
         }
     }
 
     fn confirm_prompt(&mut self) {
-        let Some(Overlay::Prompt { input, kind, .. }) = self.overlay.take() else { return };
+        let Some(Overlay::Prompt { input, kind, .. }) = self.overlay.take() else {
+            return;
+        };
         // Folder changes take a full PATH — they skip the name validation.
         if matches!(kind, PromptKind::ChangeFolder) {
             self.change_folder(&input);
@@ -1143,8 +1305,7 @@ impl App {
             self.select(0);
             return;
         };
-        let next =
-            (current as isize + delta).clamp(0, self.rows.len().saturating_sub(1) as isize);
+        let next = (current as isize + delta).clamp(0, self.rows.len().saturating_sub(1) as isize);
         self.select(next as usize);
     }
 
@@ -1156,7 +1317,9 @@ impl App {
 
     /// Right/l: expand a collapsed directory, step into an expanded one.
     fn expand_or_enter(&mut self) {
-        let Some(row) = self.selected_row() else { return };
+        let Some(row) = self.selected_row() else {
+            return;
+        };
         if !row.is_dir {
             let path = row.path.clone();
             self.open_preview(&path);
@@ -1181,7 +1344,9 @@ impl App {
 
     /// Left/h: collapse an expanded directory, otherwise jump to the parent row.
     fn collapse_or_parent(&mut self) {
-        let Some(row) = self.selected_row() else { return };
+        let Some(row) = self.selected_row() else {
+            return;
+        };
         if row.is_dir && row.expanded {
             let path = row.path.clone();
             self.tree.collapse(&path);
@@ -1193,13 +1358,18 @@ impl App {
         if depth == 0 {
             return;
         }
-        if let Some(parent) = self.rows[..index].iter().rposition(|r| r.depth == depth - 1) {
+        if let Some(parent) = self.rows[..index]
+            .iter()
+            .rposition(|r| r.depth == depth - 1)
+        {
             self.select(parent);
         }
     }
 
     fn toggle(&mut self) {
-        let Some(row) = self.selected_row() else { return };
+        let Some(row) = self.selected_row() else {
+            return;
+        };
         let path = row.path.clone();
         if !row.is_dir {
             // Enter on a file opens the zoomed preview, like clicking it.
@@ -1215,7 +1385,7 @@ impl App {
     fn rebuild(&mut self) {
         self.hovered = None;
         let selected_path = self.selected_row().map(|r| r.path.clone());
-        self.rows = self.tree.rows();
+        self.rows = self.tree.filtered_rows(&self.filter);
         if self.rows.is_empty() {
             self.selected = None;
             self.scroll = 0;
@@ -1242,7 +1412,8 @@ impl App {
         // the pane label ("Explorer"/"Sidebar") — a second border read as a
         // double frame.
         let footer_height = self.footer_height(frame.area().width);
-        let [header, body, footer] = Layout::vertical([
+        let [header, filter, body, footer] = Layout::vertical([
+            Constraint::Length(1),
             Constraint::Length(1),
             Constraint::Min(0),
             Constraint::Length(footer_height),
@@ -1251,11 +1422,16 @@ impl App {
         self.page = body.height.saturating_sub(1).max(1) as usize;
 
         self.draw_header(frame, header);
+        self.draw_filter(frame, filter);
 
         if self.rows.is_empty() {
-            let msg = match self.tree.list_error() {
-                Some(err) => format!("  (can't list this folder: {err})"),
-                None => "  (empty)".into(),
+            let msg = if !self.filter.trim().is_empty() {
+                "  (no matches)".into()
+            } else {
+                match self.tree.list_error() {
+                    Some(err) => format!("  (can't list this folder: {err})"),
+                    None => "  (empty)".into(),
+                }
             };
             frame.render_widget(Paragraph::new(msg.dim().italic()), body);
         } else {
@@ -1310,7 +1486,11 @@ impl App {
                             <= width;
                     let avail = width
                         .saturating_sub(fixed)
-                        .saturating_sub(if hint_fits { Span::raw(hint).width() } else { 0 })
+                        .saturating_sub(if hint_fits {
+                            Span::raw(hint).width()
+                        } else {
+                            0
+                        })
                         .max(4);
                     let mut spans = vec![
                         Span::styled(head, Style::default().bold()),
@@ -1322,9 +1502,7 @@ impl App {
                     }
                     vec![Line::from(spans)]
                 }
-                _ if self.show_hotkeys() => {
-                    wrap_hints(&self.hints(), frame.area().width, 3)
-                }
+                _ if self.show_hotkeys() => wrap_hints(&self.hints(), frame.area().width, 3),
                 _ => Vec::new(),
             }
         };
@@ -1367,8 +1545,7 @@ impl App {
         };
         // The name yields to the buttons and gear in narrow panes.
         let avail = usize::from(area.width.saturating_sub(gear_w + actions_w));
-        let root_label =
-            truncate_to(format!(" {}", self.tree.root_name().to_uppercase()), avail);
+        let root_label = truncate_to(format!(" {}", self.tree.root_name().to_uppercase()), avail);
         let name = Span::styled(root_label, Style::default().bold().fg(Color::LightBlue));
         let pad = usize::from(area.width)
             .saturating_sub(name.width() + usize::from(actions_w) + usize::from(gear_w));
@@ -1380,6 +1557,32 @@ impl App {
             spans.push(gear);
         }
         frame.render_widget(Paragraph::new(Line::from(spans)), area);
+    }
+
+    /// One-line live filter under the header. Click or `/` to type; results
+    /// update on each keystroke.
+    fn draw_filter(&mut self, frame: &mut Frame, area: Rect) {
+        self.filter_rect = area;
+        let focused = self.filter_focused;
+        let mut spans = vec![Span::styled(" /", Style::default().dim())];
+        if self.filter.is_empty() && !focused {
+            spans.push(Span::styled(" filter", Style::default().dim().italic()));
+        } else {
+            let cursor = usize::from(focused);
+            let avail = usize::from(area.width)
+                .saturating_sub(Span::raw("/").width() + 1 + cursor)
+                .max(1);
+            spans.push(Span::raw(format!(" {}", input_tail(&self.filter, avail))));
+            if focused {
+                spans.push(Span::styled("█", Style::default().dim()));
+            }
+        }
+        let style = if focused {
+            Style::default().bg(Color::Rgb(48, 52, 60))
+        } else {
+            Style::default()
+        };
+        frame.render_widget(Paragraph::new(Line::from(spans)).style(style), area);
     }
 
     /// Switch icon themes and REMEMBER it — an auto-detected theme that
@@ -1409,6 +1612,7 @@ impl App {
             ("↑↓", "move"),
             ("←→", "fold"),
             ("⏎", "toggle"),
+            ("/", "filter"),
             ("r", "refresh"),
             (".", "dotfiles"),
             ("c", "folder"),
@@ -1456,7 +1660,14 @@ impl App {
     /// Render the context-menu popup near its anchor, clamped inside the pane,
     /// and remember its rect for mouse hit-testing.
     fn draw_menu(&mut self, frame: &mut Frame) {
-        let Some(Overlay::Menu { x, y, entries, selected, rect, .. }) = self.overlay.as_mut()
+        let Some(Overlay::Menu {
+            x,
+            y,
+            entries,
+            selected,
+            rect,
+            ..
+        }) = self.overlay.as_mut()
         else {
             return;
         };
@@ -1487,7 +1698,9 @@ impl App {
                     let line = Line::raw(format!(" {label}"));
                     if i == *selected {
                         ListItem::new(line).style(
-                            Style::default().bg(Color::DarkGray).add_modifier(Modifier::BOLD),
+                            Style::default()
+                                .bg(Color::DarkGray)
+                                .add_modifier(Modifier::BOLD),
                         )
                     } else {
                         ListItem::new(line)
@@ -1497,19 +1710,21 @@ impl App {
             .collect();
         frame.render_widget(Clear, popup);
         frame.render_widget(
-            List::new(items).block(
-                ratatui::widgets::Block::bordered().border_style(Style::default().dim()),
-            ),
+            List::new(items)
+                .block(ratatui::widgets::Block::bordered().border_style(Style::default().dim())),
             popup,
         );
     }
-
 }
 
 fn row_item(row: &Row, theme: IconTheme, hovered: bool, selected: bool) -> ListItem<'static> {
     let indent = "  ".repeat(row.depth);
     let arrow = if row.is_dir {
-        if row.expanded { "▾ " } else { "▸ " }
+        if row.expanded {
+            "▾ "
+        } else {
+            "▸ "
+        }
     } else {
         "  "
     };
@@ -1527,7 +1742,11 @@ fn row_item(row: &Row, theme: IconTheme, hovered: bool, selected: bool) -> ListI
         Span::raw(row.name.clone()),
     ]));
     if selected {
-        item.style(Style::default().bg(Color::DarkGray).add_modifier(Modifier::BOLD))
+        item.style(
+            Style::default()
+                .bg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD),
+        )
     } else if hovered {
         // Subtler than the selection bg — hover is a hint, not a choice.
         item.style(Style::default().bg(Color::Rgb(48, 52, 60)))
@@ -1643,14 +1862,24 @@ mod tests {
             depth: 1,
             expanded: false,
         };
-        assert_eq!(create_target_dir(Some(&dir), root.clone()), root.join("src"));
-        assert_eq!(create_target_dir(Some(&file), root.clone()), root.join("src"));
+        assert_eq!(
+            create_target_dir(Some(&dir), root.clone()),
+            root.join("src")
+        );
+        assert_eq!(
+            create_target_dir(Some(&file), root.clone()),
+            root.join("src")
+        );
         assert_eq!(create_target_dir(None, root.clone()), root);
     }
 
     #[test]
     fn row_index_accounts_for_header_and_scroll() {
-        let body = BodyGeom { top: 1, height: 10, offset: 5 };
+        let body = BodyGeom {
+            top: 1,
+            height: 10,
+            offset: 5,
+        };
         assert_eq!(row_index_at(body, 100, 0), None, "header row");
         assert_eq!(row_index_at(body, 100, 1), Some(5));
         assert_eq!(row_index_at(body, 100, 10), Some(14));
@@ -1667,7 +1896,10 @@ mod tests {
         let t0 = std::time::Instant::now();
         let grace = CWD_FOLLOW_HOLD;
 
-        assert!(!should_follow_cwd(&cwd, &cwd, None, t0, grace), "already there");
+        assert!(
+            !should_follow_cwd(&cwd, &cwd, None, t0, grace),
+            "already there"
+        );
         assert!(
             !should_follow_cwd(&child, &cwd, None, t0, grace),
             "drilled into a subfolder"
@@ -1710,4 +1942,35 @@ mod tests {
         );
     }
 
+    fn press(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    #[test]
+    fn typing_in_filter_narrows_rows_on_each_key() {
+        let path =
+            std::env::temp_dir().join(format!("aa-filetree-filter-app-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&path);
+        std::fs::create_dir_all(path.join("src")).unwrap();
+        std::fs::write(path.join("src/main.rs"), b"").unwrap();
+        std::fs::write(path.join("README.md"), b"").unwrap();
+        let mut app = App::new(path.clone());
+        assert_eq!(app.rows.len(), 2, "src + README");
+
+        app.on_key(press(KeyCode::Char('/')));
+        assert!(app.filter_focused);
+        app.on_key(press(KeyCode::Char('m')));
+        app.on_key(press(KeyCode::Char('a')));
+        app.on_key(press(KeyCode::Char('i')));
+        app.on_key(press(KeyCode::Char('n')));
+        assert_eq!(app.filter, "main");
+        let names: Vec<_> = app.rows.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(names, ["src", "main.rs"]);
+
+        app.on_key(press(KeyCode::Esc));
+        assert!(app.filter.is_empty());
+        assert_eq!(app.rows.len(), 2);
+
+        let _ = std::fs::remove_dir_all(&path);
+    }
 }

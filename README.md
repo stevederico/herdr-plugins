@@ -58,6 +58,7 @@ Steve's local [herdr](https://herdr.dev) plugins in one repo. `herdr-sidebar` is
 
 ### 📁 **Explorer**
 - **VS Code-style tree** in one dockable pane: single-click folders, Material or emoji icons
+- **Filter as you type** (`/` or click the box under the title) hides non-matching files
 - **Follows the agent cwd** so the tree tracks the Grok pane you are in
 - **Re-root** on double-click; parent up-arrow when macOS hides the listing
 - **Context menus** (right-click): new file, new folder, rename, delete, copy path, Open in Finder (macOS)
@@ -89,7 +90,7 @@ Steve's local [herdr](https://herdr.dev) plugins in one repo. `herdr-sidebar` is
 
 | Dir | Plugin id | What |
 |-----|-----------|------|
-| `sidebar/` | `herdr-sidebar` | Explorer + SCM + preview (0.41.0) |
+| `sidebar/` | `herdr-sidebar` | Explorer + SCM + preview (0.47.0) |
 | `git-badge/` | `herdr-git-badge` | Folder `*` when dirty or unpushed |
 | `space-status/` | `herdr-space-status` | 🔨 working, ✅ done, ⚠️ blocked, ⚪ idle |
 | `space-title/` | `herdr-space-title` | Status emoji plus project folder on the title, session on the subtitle |
@@ -136,6 +137,7 @@ Hotkey chips live in **Settings**. Footer chips are off by default.
 | `↑` `↓` / `j` `k` | move |
 | `←` `→` / `h` `l` | fold / expand |
 | `Enter` / click | toggle folder or open preview |
+| `/` | filter files (types live) |
 | `r` | refresh |
 | `.` | hidden files |
 | `c` | change folder |

@@ -1,3 +1,8 @@
+0.47.0
+
+  Add live filter
+  Drop folder notice
+
 0.46.0
 
   Infer from session tools
