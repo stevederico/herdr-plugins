@@ -1412,17 +1412,21 @@ impl App {
         // the pane label ("Explorer"/"Sidebar") — a second border read as a
         // double frame.
         let footer_height = self.footer_height(frame.area().width);
-        let [header, filter, body, footer] = Layout::vertical([
-            Constraint::Length(1),
+        let show_filter = !matches!(
+            self.overlay,
+            Some(Overlay::Prompt { .. } | Overlay::ConfirmDelete { .. })
+        );
+        let filter_height = u16::from(show_filter);
+        let [header, body, footer, filter] = Layout::vertical([
             Constraint::Length(1),
             Constraint::Min(0),
             Constraint::Length(footer_height),
+            Constraint::Length(filter_height),
         ])
         .areas(frame.area());
         self.page = body.height.saturating_sub(1).max(1) as usize;
 
         self.draw_header(frame, header);
-        self.draw_filter(frame, filter);
 
         if self.rows.is_empty() {
             let msg = if !self.filter.trim().is_empty() {
@@ -1509,6 +1513,11 @@ impl App {
         if !footer_lines.is_empty() {
             frame.render_widget(Paragraph::new(footer_lines), footer);
         }
+        if show_filter {
+            self.draw_filter(frame, filter);
+        } else {
+            self.filter_rect = Rect::default();
+        }
 
         match self.overlay {
             Some(Overlay::Menu { .. }) => self.draw_menu(frame),
@@ -1559,8 +1568,8 @@ impl App {
         frame.render_widget(Paragraph::new(Line::from(spans)), area);
     }
 
-    /// One-line live filter under the header. Click or `/` to type; results
-    /// update on each keystroke.
+    /// One-line live filter at the bottom of the pane. Click or `/` to type;
+    /// results update on each keystroke. Hidden while a prompt owns the footer.
     fn draw_filter(&mut self, frame: &mut Frame, area: Rect) {
         self.filter_rect = area;
         let focused = self.filter_focused;

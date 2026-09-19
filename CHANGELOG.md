@@ -1,3 +1,7 @@
+0.48.0
+
+  Move filter bottom
+
 0.47.0
 
   Add live filter
