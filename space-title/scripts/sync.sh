@@ -6,8 +6,9 @@
 # after the pane process dies.
 #
 # Pane cwd is often an umbrella (~/Projects, ~) from session start. Prefer
-# the git root, then a sibling pane in a child repo, then the repo the
-# Grok session is actually touching.
+# the git root, then a sibling pane in a child repo, then tool/memory
+# paths from this Grok session (so a later restocks-gpu chat still sitting
+# in ~/Projects gets the new folder), then chat path mentions.
 set -euo pipefail
 herdr="${HERDR_BIN_PATH:-herdr}"
 export HERDR_BIN="$herdr"
@@ -149,40 +150,160 @@ def project_from_path(path: str) -> str | None:
             return name
     return None
 
-def session_text(sid: str) -> str:
+PATH_KEYS = {
+    "path",
+    "target_file",
+    "file_path",
+    "cwd",
+    "working_directory",
+    "target_directory",
+    "directory",
+}
+TOPIC_RE = re.compile(r"/memory-v2/workspaces/[^/]+/topics/([^/]+)\.md$")
+
+def session_dir(sid: str) -> Path | None:
     hits = list(GROK_SESS.glob(f"*/{sid}"))
-    if not hits:
+    return hits[0] if hits else None
+
+def read_tail(path: Path, limit: int) -> str:
+    try:
+        raw = path.read_bytes()
+    except Exception:
         return ""
-    p = hits[0]
-    chunks = []
+    if len(raw) > limit:
+        raw = raw[-limit:]
+    return raw.decode("utf-8", errors="ignore")
+
+def session_summary(sid: str) -> dict:
+    p = session_dir(sid)
+    if not p:
+        return {}
     summary = p / "summary.json"
-    if summary.exists():
-        try:
-            data = json.loads(summary.read_text())
-        except Exception:
-            data = {}
-        for key in ("generated_title", "session_summary", "last_recap", "last_turn_summary"):
-            val = data.get(key)
-            if val:
-                chunks.append(str(val))
-        root = data.get("git_root_dir")
-        if root:
-            chunks.append(str(root))
+    if not summary.exists():
+        return {}
+    try:
+        return json.loads(summary.read_text())
+    except Exception:
+        return {}
+
+def session_text(sid: str) -> str:
+    p = session_dir(sid)
+    if not p:
+        return ""
+    chunks = []
+    data = session_summary(sid)
+    for key in ("generated_title", "session_summary", "last_recap", "last_turn_summary"):
+        val = data.get(key)
+        if val:
+            chunks.append(str(val))
+    root = data.get("git_root_dir")
+    if root:
+        chunks.append(str(root))
     hist = p / "chat_history.jsonl"
     if hist.exists():
-        try:
-            raw = hist.read_bytes()
-        except Exception:
-            raw = b""
-        if len(raw) > 2_000_000:
-            raw = raw[-2_000_000:]
-        chunks.append(raw.decode("utf-8", errors="ignore"))
+        chunks.append(read_tail(hist, 2_000_000))
     return "\n".join(chunks)
+
+def session_headings(sid: str) -> str:
+    data = session_summary(sid)
+    parts = [
+        data.get("generated_title"),
+        data.get("session_summary"),
+        data.get("last_recap"),
+        data.get("last_turn_summary"),
+    ]
+    return " ".join(str(p) for p in parts if p)
 
 def title_mentions(name: str, title: str) -> bool:
     if len(name) < 4:
         return False
     return re.search(rf"(?i)(?<![A-Za-z0-9]){re.escape(name)}(?![A-Za-z0-9])", title) is not None
+
+def map_tool_path(path: str, child_by_name: dict[str, str], children: list[str]) -> str | None:
+    if not path:
+        return None
+    m = TOPIC_RE.search(path.replace("\\", "/"))
+    if m:
+        return child_by_name.get(m.group(1).lower())
+    for child in children:
+        if path == child or path.startswith(child.rstrip("/") + "/"):
+            return child
+    return None
+
+def paths_from_tool_obj(obj) -> list[str]:
+    out = []
+    if isinstance(obj, dict):
+        for key, val in obj.items():
+            if key in PATH_KEYS and isinstance(val, str):
+                out.append(val)
+            elif key == "locations" and isinstance(val, list):
+                for loc in val:
+                    if isinstance(loc, dict) and isinstance(loc.get("path"), str):
+                        out.append(loc["path"])
+            elif key == "rawInput" and isinstance(val, dict):
+                out.extend(paths_from_tool_obj(val))
+            elif key == "arguments" and isinstance(val, str):
+                try:
+                    out.extend(paths_from_tool_obj(json.loads(val)))
+                except Exception:
+                    pass
+            elif key == "input" and isinstance(val, str) and val.startswith("{"):
+                try:
+                    out.extend(paths_from_tool_obj(json.loads(val)))
+                except Exception:
+                    pass
+    elif isinstance(obj, list):
+        for item in obj:
+            out.extend(paths_from_tool_obj(item))
+    return out
+
+def session_tool_projects(sid: str, children: list[str]) -> dict[str, int]:
+    """Count this session's tool paths / memory topics that map to child repos.
+
+    Ignores tool result bodies so a read of omarchy-plugins.md does not
+    count every repo that file happens to mention.
+    """
+    scores: dict[str, int] = {}
+    child_by_name = {Path(c).name.lower(): c for c in children}
+    p = session_dir(sid)
+    if not p:
+        return scores
+
+    def bump(path: str):
+        hit = map_tool_path(path, child_by_name, children)
+        if hit:
+            scores[hit] = scores.get(hit, 0) + 1
+
+    git_root_dir = session_summary(sid).get("git_root_dir")
+    if isinstance(git_root_dir, str):
+        bump(git_root_dir.rstrip("/"))
+
+    updates = p / "updates.jsonl"
+    if updates.exists():
+        for line in read_tail(updates, 12_000_000).splitlines():
+            try:
+                rec = json.loads(line)
+            except Exception:
+                continue
+            update = ((rec.get("params") or {}).get("update")) or {}
+            for path in paths_from_tool_obj(update):
+                bump(path)
+
+    hist = p / "chat_history.jsonl"
+    if hist.exists():
+        for line in read_tail(hist, 3_000_000).splitlines():
+            try:
+                rec = json.loads(line)
+            except Exception:
+                continue
+            kind = rec.get("type")
+            if kind == "assistant":
+                for path in paths_from_tool_obj(rec.get("tool_calls")):
+                    bump(path)
+            elif kind == "backend_tool_call":
+                for path in paths_from_tool_obj(rec.get("kind")):
+                    bump(path)
+    return scores
 
 def infer_project(cwd: str, sid: str | None, title: str, extra_paths: list[str]) -> str | None:
     children: list[str] = []
@@ -200,11 +321,25 @@ def infer_project(cwd: str, sid: str | None, title: str, extra_paths: list[str])
     if len(pane_hits) == 1:
         return Path(next(iter(pane_hits))).name
 
-    t = title or ""
+    t = " ".join(x for x in (title, session_headings(sid) if sid else "") if x)
     pool = pane_hits or set(children)
     title_hits = {c for c in pool if title_mentions(Path(c).name, t)}
     if len(title_hits) == 1:
         return Path(next(iter(title_hits))).name
+
+    if sid:
+        tool_hits = {
+            child: n
+            for child, n in session_tool_projects(sid, children).items()
+            if child in pool
+        }
+        for child in list(tool_hits):
+            if Path(child).name.lower() in CONTEXT_REPOS and child not in title_hits:
+                tool_hits.pop(child, None)
+        ranked_tools = sorted(tool_hits.items(), key=lambda kv: kv[1], reverse=True)
+        if ranked_tools:
+            if len(ranked_tools) == 1 or ranked_tools[0][1] >= ranked_tools[1][1] * 1.5:
+                return Path(ranked_tools[0][0]).name
 
     text = session_text(sid) if sid else ""
     mentions: dict[str, int] = {}

@@ -1,3 +1,7 @@
+0.46.0
+
+  Infer from session tools
+
 0.45.0
 
   Infer umbrella project
