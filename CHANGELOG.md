@@ -1,3 +1,7 @@
+0.45.0
+
+  Infer umbrella project
+
 0.44.0
 
   Document grok-resume command

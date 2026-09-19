@@ -1,15 +1,20 @@
 #!/usr/bin/env bash
-# Copy status emoji + folder name onto the workspace label (title).
+# Copy status emoji + project folder onto the workspace label (title).
 # Baking the emoji into the label avoids Herdr's · between adjacent tokens.
 # Copy the Grok/agent session title onto $folder (subtitle).
 # Pin the live Grok session UUID on the workspace so `g` can resume it
 # after the pane process dies.
+#
+# Pane cwd is often an umbrella (~/Projects, ~) from session start. Prefer
+# the git root, then a sibling pane in a child repo, then the repo the
+# Grok session is actually touching.
 set -euo pipefail
 herdr="${HERDR_BIN_PATH:-herdr}"
 export HERDR_BIN="$herdr"
 
 python3 <<'PY'
 import json, os, subprocess, re
+from functools import lru_cache
 from pathlib import Path
 
 herdr = os.environ["HERDR_BIN"]
@@ -21,6 +26,23 @@ STATUS_EMOJI = {
     "idle": "⚪",
 }
 IDLE_EMOJI = STATUS_EMOJI["idle"]
+UMBRELLA_NAMES = {
+    "projects",
+    "project",
+    "work",
+    "src",
+    "code",
+    "repos",
+    "repo",
+    "dev",
+    "desktop",
+    "documents",
+    "downloads",
+    "home",
+}
+# Always pulled into Grok context; never treat as "the project" unless the
+# session title or a pane cwd actually points at it.
+CONTEXT_REPOS = {"brain"}
 SUF = re.compile(
     r"\s+[-–—]\s+(grok|claude|codex|opencode|gemini|cursor)\s*$",
     re.I,
@@ -29,6 +51,7 @@ UUID = re.compile(
     r"/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:/|$)"
 )
 GROK_SESS = Path.home() / ".grok" / "sessions"
+HOME = Path.home()
 
 def jcmd(*args):
     try:
@@ -49,11 +72,162 @@ def session_label(title: str | None) -> str | None:
 def space_title(fold: str, status: str | None) -> str:
     return f"{STATUS_EMOJI.get(status or '', IDLE_EMOJI)} {fold}"
 
-def folder_name(p: dict) -> str | None:
-    cwd = p.get("foreground_cwd") or p.get("cwd")
-    if not cwd:
+def is_tmp(path: str) -> bool:
+    p = Path(path).as_posix()
+    return (
+        p == "/tmp"
+        or p.startswith("/tmp/")
+        or p.startswith("/var/tmp")
+        or p.startswith("/dev/")
+        or p.startswith("/proc/")
+    )
+
+def usable_path(path: str | None) -> str | None:
+    if not path:
         return None
-    name = Path(cwd).name
+    p = Path(path)
+    if not p.is_absolute() or is_tmp(path):
+        return None
+    return str(p)
+
+def is_umbrella(path: str) -> bool:
+    p = Path(path)
+    try:
+        if p.resolve() == HOME.resolve():
+            return True
+    except Exception:
+        if p == HOME:
+            return True
+    return p.name.lower() in UMBRELLA_NAMES
+
+@lru_cache(maxsize=256)
+def git_root(cwd: str) -> str | None:
+    try:
+        return subprocess.check_output(
+            ["git", "-C", cwd, "rev-parse", "--show-toplevel"],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip() or None
+    except Exception:
+        return None
+
+@lru_cache(maxsize=32)
+def child_git_roots(cwd: str) -> tuple[str, ...]:
+    p = Path(cwd)
+    if not p.is_dir():
+        return ()
+    roots = []
+    try:
+        for child in p.iterdir():
+            if child.is_dir() and not child.name.startswith(".") and (child / ".git").exists():
+                roots.append(str(child))
+    except Exception:
+        pass
+    return tuple(roots)
+
+def bags_for(cwd: str) -> list[str]:
+    bags = [cwd]
+    p = Path(cwd)
+    try:
+        home = p.resolve() == HOME.resolve()
+    except Exception:
+        home = p == HOME
+    if home:
+        for extra in ("Projects", "Work", "code", "src"):
+            d = HOME / extra
+            if d.is_dir():
+                bags.append(str(d))
+    return bags
+
+def project_from_path(path: str) -> str | None:
+    root = git_root(path)
+    if root and not is_umbrella(root):
+        return Path(root).name
+    if not is_umbrella(path):
+        name = Path(path).name
+        if name and name not in (".", "/"):
+            return name
+    return None
+
+def session_text(sid: str) -> str:
+    hits = list(GROK_SESS.glob(f"*/{sid}"))
+    if not hits:
+        return ""
+    p = hits[0]
+    chunks = []
+    summary = p / "summary.json"
+    if summary.exists():
+        try:
+            data = json.loads(summary.read_text())
+        except Exception:
+            data = {}
+        for key in ("generated_title", "session_summary", "last_recap", "last_turn_summary"):
+            val = data.get(key)
+            if val:
+                chunks.append(str(val))
+        root = data.get("git_root_dir")
+        if root:
+            chunks.append(str(root))
+    hist = p / "chat_history.jsonl"
+    if hist.exists():
+        try:
+            raw = hist.read_bytes()
+        except Exception:
+            raw = b""
+        if len(raw) > 2_000_000:
+            raw = raw[-2_000_000:]
+        chunks.append(raw.decode("utf-8", errors="ignore"))
+    return "\n".join(chunks)
+
+def title_mentions(name: str, title: str) -> bool:
+    if len(name) < 4:
+        return False
+    return re.search(rf"(?i)(?<![A-Za-z0-9]){re.escape(name)}(?![A-Za-z0-9])", title) is not None
+
+def infer_project(cwd: str, sid: str | None, title: str, extra_paths: list[str]) -> str | None:
+    children: list[str] = []
+    for bag in bags_for(cwd):
+        children.extend(child_git_roots(bag))
+    if not children:
+        return None
+    pane_hits: set[str] = set()
+    for extra in extra_paths:
+        root = git_root(extra) or extra
+        for child in children:
+            if extra == child or extra.startswith(child.rstrip("/") + "/") or root == child:
+                pane_hits.add(child)
+                break
+    if len(pane_hits) == 1:
+        return Path(next(iter(pane_hits))).name
+
+    t = title or ""
+    pool = pane_hits or set(children)
+    title_hits = {c for c in pool if title_mentions(Path(c).name, t)}
+    if len(title_hits) == 1:
+        return Path(next(iter(title_hits))).name
+
+    text = session_text(sid) if sid else ""
+    mentions: dict[str, int] = {}
+    for child in pool:
+        name = Path(child).name
+        if name.lower() in CONTEXT_REPOS and child not in title_hits:
+            continue
+        n = text.count(child) if text else 0
+        try:
+            n += text.count("~/" + str(Path(child).relative_to(HOME))) if text else 0
+        except Exception:
+            pass
+        if n:
+            mentions[child] = n
+    ranked = sorted(mentions.items(), key=lambda kv: kv[1], reverse=True)
+    if not ranked or ranked[0][1] < 12:
+        return None
+    if len(ranked) > 1 and ranked[0][1] < ranked[1][1] * 1.4:
+        return None
+    return Path(ranked[0][0]).name
+
+def leaf_name(path: str) -> str | None:
+    name = Path(path).name
     if not name or name in (".", "/"):
         return None
     return name
@@ -183,22 +357,33 @@ spaces = ((jcmd("workspace", "list") or {}).get("result") or {}).get("workspaces
 labels = {w.get("workspace_id"): (w.get("label") or "") for w in spaces}
 statuses = {w.get("workspace_id"): w.get("agent_status") for w in spaces}
 cwds: dict[str, str] = {}
+ws_paths: dict[str, list[str]] = {}
+ws_base: dict[str, str] = {}
 for p in panes:
     wid = p.get("workspace_id")
-    cwd = p.get("foreground_cwd") or p.get("cwd")
-    if wid and cwd and (wid not in cwds or p.get("agent") or p.get("focused")):
-        cwds[wid] = cwd
+    if not wid:
+        continue
+    cwd = usable_path(p.get("cwd"))
+    fg = usable_path(p.get("foreground_cwd"))
+    if cwd:
+        ws_paths.setdefault(wid, []).append(cwd)
+        if wid not in ws_base or p.get("agent") or p.get("focused"):
+            ws_base[wid] = cwd
+        if wid not in cwds or p.get("agent") or p.get("focused"):
+            cwds[wid] = cwd
+    if fg and fg != cwd:
+        ws_paths.setdefault(wid, []).append(fg)
+        if wid not in ws_base:
+            ws_base[wid] = fg
+        if wid not in cwds:
+            cwds[wid] = fg
 summaries = grok_summaries()
 
 best: dict[str, str] = {}
-folders: dict[str, str] = {}
 agent_panes: dict[str, str] = {}
 sessions: dict[str, str] = live_grok_sessions()
 for p in panes:
     wid = p.get("workspace_id")
-    fold = folder_name(p)
-    if wid and fold and (wid not in folders or p.get("focused") or p.get("agent")):
-        folders[wid] = fold
     reported = p.get("agent_session_id") or (p.get("tokens") or {}).get("grok_session")
     if wid and reported and wid not in sessions:
         sessions[wid] = reported
@@ -206,7 +391,38 @@ for p in panes:
         agent_panes[wid] = p.get("pane_id")
     if not p.get("agent"):
         continue
+    title = p.get("terminal_title_stripped") or p.get("terminal_title")
+    lab = session_label(title)
+    if not wid or not lab:
+        continue
+    if wid not in best or p.get("focused"):
+        best[wid] = lab
+
+for w in spaces:
+    wid = w.get("workspace_id")
+    if not wid or wid in sessions:
+        continue
+    existing = (w.get("tokens") or {}).get("grok_session")
+    if existing:
+        sessions[wid] = existing
+
+folders: dict[str, str] = {}
+for wid, base in ws_base.items():
+    fold = project_from_path(base)
+    if not fold:
+        extras = [path for path in ws_paths.get(wid, []) if path != base]
+        fold = infer_project(base, sessions.get(wid), best.get(wid) or "", extras)
+    if not fold:
+        fold = leaf_name(base)
+    if fold:
+        folders[wid] = fold
+
+for p in panes:
+    if not p.get("agent"):
+        continue
     pid = p.get("pane_id")
+    wid = p.get("workspace_id")
+    fold = folders.get(wid) if wid else None
     if pid and fold:
         subprocess.run(
             [herdr, "pane", "report-metadata", pid, "--source", "herdr-space-title", "--token", f"folder={fold}"],
@@ -214,12 +430,6 @@ for p in panes:
             stderr=subprocess.DEVNULL,
             check=False,
         )
-    title = p.get("terminal_title_stripped") or p.get("terminal_title")
-    lab = session_label(title)
-    if not wid or not lab:
-        continue
-    if wid not in best or p.get("focused"):
-        best[wid] = lab
 
 for wid, fold in folders.items():
     lab = space_title(fold, statuses.get(wid))
@@ -242,10 +452,6 @@ for wid, lab in best.items():
 for w in spaces:
     wid = w.get("workspace_id")
     if not wid or wid in sessions:
-        continue
-    existing = (w.get("tokens") or {}).get("grok_session")
-    if existing:
-        sessions[wid] = existing
         continue
     tokens = w.get("tokens") or {}
     sid = match_session_by_title(tokens.get("folder") or "", cwds.get(wid) or "", summaries)
