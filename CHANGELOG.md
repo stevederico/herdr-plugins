@@ -1,3 +1,7 @@
+0.50.0
+
+  Fix agents subtitle dupes
+
 0.49.0
 
   Drop agents sidebar emojis

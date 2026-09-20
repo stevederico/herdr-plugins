@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Copy the project folder onto the workspace label (title).
-# Copy the Grok/agent session title onto $folder (subtitle).
+# Copy the Grok/agent session title onto $folder (subtitle) on the workspace
+# and on agent panes (Agents sidebar reads pane metadata). Skip the pane
+# token when it would match the project name.
 # Pin the live Grok session UUID on the workspace so `g` can resume it
 # after the pane process dies.
 #
@@ -545,10 +547,23 @@ for p in panes:
         continue
     pid = p.get("pane_id")
     wid = p.get("workspace_id")
+    if not pid:
+        continue
+    # Agents sidebar $folder is pane metadata (subtitle). Prefer the session
+    # title; skip when it matches the workspace/project name so the row
+    # does not duplicate the title line.
+    lab = best.get(wid) if wid else None
     fold = folders.get(wid) if wid else None
-    if pid and fold:
+    if lab and lab != fold:
         subprocess.run(
-            [herdr, "pane", "report-metadata", pid, "--source", "herdr-space-title", "--token", f"folder={fold}"],
+            [herdr, "pane", "report-metadata", pid, "--source", "herdr-space-title", "--token", f"folder={lab}"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+    else:
+        subprocess.run(
+            [herdr, "pane", "report-metadata", pid, "--source", "herdr-space-title", "--clear-token", "folder"],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             check=False,
