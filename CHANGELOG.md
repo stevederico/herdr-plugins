@@ -1,3 +1,7 @@
+0.51.0
+
+  Show dirty star on agents
+
 0.50.0
 
   Fix agents subtitle dupes

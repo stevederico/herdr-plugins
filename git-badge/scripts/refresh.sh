@@ -88,13 +88,28 @@ try:
 except Exception:
     pass
 
-def set_dirty(wid: str, on: bool):
+def set_dirty_ws(wid: str, on: bool):
     args = [herdr, "workspace", "report-metadata", wid, "--source", source]
     if on:
         args += ["--token", "dirty=*"]
     else:
         args += ["--clear-token", "dirty"]
     subprocess.run(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+def set_dirty_pane(pid: str, on: bool):
+    args = [herdr, "pane", "report-metadata", pid, "--source", source]
+    if on:
+        args += ["--token", "dirty=*"]
+    else:
+        args += ["--clear-token", "dirty"]
+    subprocess.run(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+agent_panes: dict[str, list[str]] = {}
+for p in panes:
+    wid = p.get("workspace_id")
+    pid = p.get("pane_id")
+    if wid and pid and p.get("agent"):
+        agent_panes.setdefault(wid, []).append(pid)
 
 for w in ws_rows:
     wid = w.get("workspace_id") or w.get("id")
@@ -107,5 +122,8 @@ for w in ws_rows:
             roots.add(root)
         for child in child_git_roots(cwd):
             roots.add(child)
-    set_dirty(wid, any(dirty(r) for r in roots))
+    on = any(dirty(r) for r in roots)
+    set_dirty_ws(wid, on)
+    for pid in agent_panes.get(wid, ()):
+        set_dirty_pane(pid, on)
 PY

@@ -1,7 +1,7 @@
 id = "herdr-git-badge"
 name = "herdr-git-badge"
-version = "0.1.0"
-description = "Star on the folder name when the worktree is dirty or unpushed"
+version = "0.2.0"
+description = "Star ($dirty=*) on space and agent titles when the worktree is dirty or unpushed"
 min_herdr_version = "0.7.0"
 platforms = ["linux", "macos"]
 
