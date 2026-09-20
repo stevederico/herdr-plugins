@@ -1,0 +1,33 @@
+# Walk the agents list like workspace navigate: highlight, Enter to focus.
+id = "herdr-agent-picker"
+name = "herdr-agent-picker"
+version = "0.1.0"
+description = "Popup agent picker: up/down highlight, Enter focuses (workspace_picker for agents)"
+min_herdr_version = "0.7.0"
+platforms = ["linux", "macos"]
+
+[[panes]]
+id = "picker"
+title = "Agents"
+placement = "popup"
+width = 56
+height = "70%"
+command = ["python3", "scripts/picker.py"]
+
+[[actions]]
+id = "open"
+title = "Open agent picker"
+description = "Open the agents highlight picker (same walk/Enter flow as workspace navigate)."
+command = ["bash", "scripts/open.sh"]
+
+[[actions]]
+id = "open-up"
+title = "Agent picker (up)"
+description = "Open the agents picker and move the highlight up one row."
+command = ["bash", "scripts/open.sh", "up"]
+
+[[actions]]
+id = "open-down"
+title = "Agent picker (down)"
+description = "Open the agents picker and move the highlight down one row."
+command = ["bash", "scripts/open.sh", "down"]

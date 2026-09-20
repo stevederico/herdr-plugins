@@ -1,3 +1,7 @@
+0.52.0
+
+  Add agents popup picker
+
 0.51.0
 
   Show dirty star on agents

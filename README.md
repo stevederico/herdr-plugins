@@ -25,6 +25,7 @@ herdr plugin link ./sidebar
 herdr plugin link ./git-badge
 herdr plugin link ./space-title
 herdr plugin link ./space-status
+herdr plugin link ./agent-picker
 ```
 
 Focus a tab. The sidebar docks to the right of the agent. Click a file: the preview opens on the far right.
@@ -82,6 +83,7 @@ Steve's local [herdr](https://herdr.dev) plugins in one repo. `herdr-sidebar` is
 - **git-badge** puts `*` next to the folder name when the worktree is dirty or unpushed
 - **space-status** clears leftover status emoji tokens on spaces (Agents sidebar stays plain)
 - **space-title** names spaces from the project folder and puts the Grok/agent session title on the subtitle. If the pane still sits in `~/Projects` (or `~`), it infers the git repo from this session's tool paths and memory topics, then chat mentions. Pins the Grok session UUID (`grok-resume` resumes it after a pane reset)
+- **agent-picker** popup walks agents like workspace navigate (highlight → Enter). Bind `prefix+up` / `prefix+down` to `herdr-agent-picker.open-up` / `open-down`
 - **explorer** is a thin leftover file tree. Keep it disabled if you run the sidebar
 
 <br />
@@ -92,6 +94,7 @@ Steve's local [herdr](https://herdr.dev) plugins in one repo. `herdr-sidebar` is
 |-----|-----------|------|
 | `sidebar/` | `herdr-sidebar` | Explorer + SCM + preview (0.48.0) |
 | `git-badge/` | `herdr-git-badge` | Folder `*` when dirty or unpushed |
+| `agent-picker/` | `herdr-agent-picker` | Popup agent highlight picker |
 | `space-status/` | `herdr-space-status` | Clear status emoji tokens on spaces |
 | `space-title/` | `herdr-space-title` | Project folder on the title, session on the subtitle |
 | `explorer/` | `herdr-explorer` | Thin file tree (optional) |
