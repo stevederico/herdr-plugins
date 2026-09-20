@@ -1,8 +1,8 @@
-# Status emoji on spaces: 🔨 working, ✅ done, ⚠️ blocked, ⚪ idle.
+# Clears leftover $status emoji tokens on spaces (Agents sidebar stays plain).
 id = "herdr-space-status"
 name = "herdr-space-status"
-version = "0.1.0"
-description = "Emoji on spaces: hammer working, check done, warning blocked, white idle"
+version = "0.2.0"
+description = "Clear status emoji tokens on spaces so the Agents sidebar stays plain"
 min_herdr_version = "0.7.0"
 platforms = ["linux", "macos"]
 
@@ -25,5 +25,5 @@ command = ["bash", "scripts/refresh.sh"]
 [[actions]]
 id = "refresh"
 title = "Refresh space status"
-description = "Re-scan workspace agent state and update status emojis"
+description = "Clear status emoji tokens on all workspaces"
 command = ["bash", "scripts/refresh.sh"]

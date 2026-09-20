@@ -1,3 +1,7 @@
+0.49.0
+
+  Drop agents sidebar emojis
+
 0.48.0
 
   Move filter bottom
