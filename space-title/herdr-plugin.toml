@@ -1,7 +1,7 @@
 id = "herdr-space-title"
 name = "herdr-space-title"
-version = "0.8.0"
-description = "Rename spaces from project folder; session title on $folder subtitle (workspace + agent panes); infer repo from tools/memory when cwd is ~/Projects; pin grok session UUID"
+version = "0.9.0"
+description = "Rename spaces from project folder until you rename them; session title on $folder subtitle (workspace + agent panes); infer repo from tools/memory when cwd is ~/Projects; pin grok session UUID"
 min_herdr_version = "0.7.0"
 platforms = ["linux", "macos"]
 
@@ -24,5 +24,5 @@ command = ["bash", "scripts/sync.sh"]
 [[actions]]
 id = "sync"
 title = "Sync Space Titles"
-description = "Rename workspaces from project folder; copy session titles to the subtitle"
+description = "Auto-rename workspaces from project folder (skips manual names); copy session titles to the subtitle"
 command = ["bash", "scripts/sync.sh"]

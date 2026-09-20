@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Copy the project folder onto the workspace label (title).
+# Copy the project folder onto the workspace label (title) — only while the
+# label still matches our last auto name (`auto_label` token). Manual renames
+# stick; rename back to the project folder to resume auto.
 # Copy the Grok/agent session title onto $folder (subtitle) on the workspace
 # and on agent panes (Agents sidebar reads pane metadata). Skip the pane
 # token when it would match the project name.
@@ -481,6 +483,7 @@ def live_grok_sessions() -> dict[str, str]:
 panes = ((jcmd("pane", "list") or {}).get("result") or {}).get("panes") or []
 spaces = ((jcmd("workspace", "list") or {}).get("result") or {}).get("workspaces") or []
 labels = {w.get("workspace_id"): (w.get("label") or "") for w in spaces}
+ws_tokens = {w.get("workspace_id"): (w.get("tokens") or {}) for w in spaces}
 cwds: dict[str, str] = {}
 ws_paths: dict[str, list[str]] = {}
 ws_base: dict[str, str] = {}
@@ -569,14 +572,57 @@ for p in panes:
             check=False,
         )
 
+def unmanaged_label(wid: str, current: str, base: str | None) -> bool:
+    """True when the label still looks like stock / previous auto naming."""
+    if not current:
+        return True
+    if current == wid:
+        return True
+    if current.lower() in UMBRELLA_NAMES:
+        return True
+    if base and leaf_name(base) == current:
+        return True
+    return False
+
+def pin_auto_label(wid: str, fold: str):
+    subprocess.run(
+        [
+            herdr,
+            "workspace",
+            "report-metadata",
+            wid,
+            "--source",
+            "herdr-space-title",
+            "--token",
+            f"auto_label={fold}",
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+
 for wid, fold in folders.items():
-    if fold != labels.get(wid, ""):
-        subprocess.run(
-            [herdr, "workspace", "rename", wid, fold],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            check=False,
-        )
+    current = labels.get(wid, "") or ""
+    tokens = ws_tokens.get(wid) or {}
+    auto = tokens.get("auto_label")
+    if current == fold:
+        pin_auto_label(wid, fold)
+        continue
+    if auto is not None:
+        # Only overwrite while the space still carries our last auto name.
+        if current != auto:
+            continue
+    elif not unmanaged_label(wid, current, ws_base.get(wid)):
+        # Custom title from before auto_label existed — leave it alone.
+        continue
+    subprocess.run(
+        [herdr, "workspace", "rename", wid, fold],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    pin_auto_label(wid, fold)
+    labels[wid] = fold
 
 for wid, lab in best.items():
     subprocess.run(

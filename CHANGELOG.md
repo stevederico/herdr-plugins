@@ -1,3 +1,7 @@
+0.53.0
+
+  Keep manual space titles
+
 0.52.0
 
   Add agents popup picker
