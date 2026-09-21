@@ -1,3 +1,7 @@
+0.57.0
+
+  Record README version
+
 0.56.0
 
   Match README version
