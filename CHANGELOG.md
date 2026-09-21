@@ -1,3 +1,7 @@
+0.56.0
+
+  Match README version
+
 0.55.0
 
   Skip workspace-focus hooks
