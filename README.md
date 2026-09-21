@@ -92,7 +92,7 @@ Steve's local [herdr](https://herdr.dev) plugins in one repo. `herdr-sidebar` is
 
 | Dir | Plugin id | What |
 |-----|-----------|------|
-| `sidebar/` | `herdr-sidebar` | Explorer + SCM + preview (0.48.0) |
+| `sidebar/` | `herdr-sidebar` | Explorer + SCM + preview (0.55.0) |
 | `git-badge/` | `herdr-git-badge` | Folder `*` when dirty or unpushed |
 | `agent-picker/` | `herdr-agent-picker` | Popup agent highlight picker |
 | `space-status/` | `herdr-space-status` | Clear status emoji tokens on spaces |
