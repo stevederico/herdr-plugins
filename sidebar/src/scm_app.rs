@@ -591,7 +591,6 @@ impl App {
         };
         app.apply_identity();
         app.refresh();
-        app.open_repo_hunk_if_idle();
         app
     }
 
@@ -666,7 +665,6 @@ impl App {
         self.last_beat = std::time::Instant::now();
         if let Some(ctl) = &self.pane_ctl {
             ctl.report_tokens(MY_VIEW, self.merged());
-            herdr_sidebar::viewer::touch_hunk_preview(&ctl.pane_id);
         }
     }
 
@@ -1703,15 +1701,7 @@ impl App {
             .then(|| self.history_target.clone())
             .flatten();
         let root = repo.git.root();
-        let payload = if herdr_sidebar::viewer::hunk_bin().is_some() {
-            if kind == Drawer::Stashes {
-                herdr_sidebar::viewer::hunk_stash_payload(root, &spec)
-            } else {
-                herdr_sidebar::viewer::hunk_show_payload(root, &spec, path.as_deref())
-            }
-        } else {
-            herdr_sidebar::viewer::show_request(root, &spec, path.as_deref())
-        };
+        let payload = herdr_sidebar::viewer::show_request(root, &spec, path.as_deref());
         if let Err(e) = herdr_sidebar::viewer::open_in_pane(&pane_id, root, &payload) {
             self.flash = Some((e, true));
         }
@@ -1719,7 +1709,6 @@ impl App {
 
     /// Show a file's diff in the preview pane beside the sidebar. Staged
     /// rows show the staged diff; untracked files render as one addition.
-    /// Prefers [hunk](https://hunk.dev) when installed.
     fn open_diff(&mut self, repo: usize, entry: &FileEntry, staged: bool) {
         let Some(pane_id) = self.pane_ctl.as_ref().map(|c| c.pane_id.clone()) else {
             self.flash = Some(("diff preview needs a herdr pane".into(), true));
@@ -1727,18 +1716,14 @@ impl App {
         };
         let Some(repo) = self.repos.get(repo) else { return };
         let root = repo.git.root();
-        let payload = if herdr_sidebar::viewer::hunk_bin().is_some() {
-            herdr_sidebar::viewer::hunk_diff_payload(root, staged)
+        let kind = if staged {
+            "staged"
+        } else if entry.letter == 'U' {
+            "untracked"
         } else {
-            let kind = if staged {
-                "staged"
-            } else if entry.letter == 'U' {
-                "untracked"
-            } else {
-                "worktree"
-            };
-            herdr_sidebar::viewer::diff_request(root, &entry.path, kind)
+            "worktree"
         };
+        let payload = herdr_sidebar::viewer::diff_request(root, &entry.path, kind);
         if let Err(e) = herdr_sidebar::viewer::open_in_pane(&pane_id, root, &payload) {
             self.flash = Some((e, true));
         }
@@ -1858,27 +1843,6 @@ impl App {
             self.selected = Some(index.min(self.rows.len() - 1));
             self.snap = true;
             self.follow_selection();
-        }
-    }
-
-    /// Fill an empty preview with hunk for this repo. No letter keys.
-    fn open_repo_hunk_if_idle(&mut self) {
-        let Some(pane_id) = self.pane_ctl.as_ref().map(|c| c.pane_id.clone()) else {
-            return;
-        };
-        if !herdr_sidebar::viewer::preview_follows_diff(&pane_id) {
-            return;
-        }
-        let Some(repo) = self.active_repo() else {
-            return;
-        };
-        if herdr_sidebar::viewer::hunk_bin().is_none() {
-            return;
-        }
-        let root = repo.git.root();
-        let payload = herdr_sidebar::viewer::hunk_diff_payload(root, false);
-        if let Err(e) = herdr_sidebar::viewer::open_in_pane(&pane_id, root, &payload) {
-            self.flash = Some((e, true));
         }
     }
 
