@@ -19,7 +19,7 @@
 
 id = "herdr-sidebar"
 name = "herdr-sidebar"
-version = "0.55.0"
+version = "0.59.0"
 description = "VS Code-style sidebar: file explorer + source control (with ✧ AI commit messages) in one herdr pane."
 min_herdr_version = "0.7.0"
 platforms = ["linux", "macos", "windows"]
@@ -97,30 +97,9 @@ title = "Redeploy sidebar panes"
 description = "Close all sidebar panes in every workspace so they respawn on the latest build."
 command = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "scripts/redeploy.ps1"]
 
-# Sidebar mode: on every tab/workspace focus, quietly ensure the focused tab
-# has a sidebar to the right of the agent (idempotent, never steals focus).
-# A tab hooked at first focus still has its single full-height pane, so the
-# sidebar becomes a full-height right column that later splits can't shorten.
-# tab.created / workspace.created fire when a restarted server RESTORES its
-# session — the resumed tab is already focused, so no focus TRANSITION (and
-# no tab.focused/workspace.focused) ever happens, which used to leave dead
-# resumed sidebars (label + scrollback survive a restart; the process and
-# metadata tokens do not) sitting unhealed until the user switched tabs.
-# pane.focused heals resumed corpses the moment the user interacts with the
-# restored session (client attach emits no tab/workspace events at all).
-# Hooking pane.* from a pane-creating script is only safe because open()
-# holds its lock until the spawned TUI stamps its token — queued invocations
-# then observe a LIVE pane and no-op instead of replace-looping.
-[[events]]
-on = "pane.focused"
-platforms = ["linux", "macos"]
-command = ["bash", "scripts/ensure-sidebar.sh"]
-
-[[events]]
-on = "pane.focused"
-platforms = ["windows"]
-command = ["wscript", "//B", "scripts/launch-ensure.vbs"]
-
+# Only heal on create/restore. Focus hooks fight prefix+w navigate:
+# ensure splits or restamps a pane, the last space row flashes, and
+# the highlight cannot leave the bottom.
 [[events]]
 on = "tab.created"
 platforms = ["linux", "macos"]
@@ -138,15 +117,5 @@ command = ["bash", "scripts/ensure-sidebar.sh"]
 
 [[events]]
 on = "workspace.created"
-platforms = ["windows"]
-command = ["wscript", "//B", "scripts/launch-ensure.vbs"]
-
-[[events]]
-on = "tab.focused"
-platforms = ["linux", "macos"]
-command = ["bash", "scripts/ensure-sidebar.sh"]
-
-[[events]]
-on = "tab.focused"
 platforms = ["windows"]
 command = ["wscript", "//B", "scripts/launch-ensure.vbs"]

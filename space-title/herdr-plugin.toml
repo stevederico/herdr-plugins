@@ -1,18 +1,13 @@
 id = "herdr-space-title"
 name = "herdr-space-title"
-version = "0.10.0"
+version = "0.11.0"
 description = "Rename spaces from project folder until you rename them; session title on $folder subtitle (workspace + agent panes); infer repo from tools/memory when cwd is ~/Projects; pin grok session UUID"
 min_herdr_version = "0.7.0"
 platforms = ["linux", "macos"]
 
-[[events]]
-on = "pane.focused"
-command = ["bash", "scripts/sync.sh"]
-
-[[events]]
-on = "tab.focused"
-command = ["bash", "scripts/sync.sh"]
-
+# Do not hook pane/tab/workspace focused. Those fire (or retrigger) during
+# prefix+w navigate; rename + report-metadata redraws the row and the
+# highlight flashes or sticks on the last space.
 [[events]]
 on = "pane.agent_status_changed"
 command = ["bash", "scripts/sync.sh"]

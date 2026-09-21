@@ -1,20 +1,11 @@
 id = "herdr-git-badge"
 name = "herdr-git-badge"
-version = "0.3.0"
+version = "0.4.0"
 description = "Star ($dirty=*) on space and agent titles when the worktree is dirty or unpushed"
 min_herdr_version = "0.7.0"
 platforms = ["linux", "macos"]
 
-# Refresh after focus changes (agents finish, you switch tabs, etc.).
-# Do not hook workspace.focused — that fires while prefix+w navigate
-# highlights a row and the rename/metadata call kills navigate mode.
-[[events]]
-on = "tab.focused"
-command = ["bash", "scripts/refresh.sh"]
-
-[[events]]
-on = "pane.focused"
-command = ["bash", "scripts/refresh.sh"]
+# No focus hooks. Metadata writes during navigate make the last row flash.
 
 [[actions]]
 id = "refresh"

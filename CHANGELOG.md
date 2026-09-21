@@ -1,3 +1,7 @@
+0.59.0
+
+  Stop focus-hook flash
+
 0.58.0
 
   Complete changelog header
