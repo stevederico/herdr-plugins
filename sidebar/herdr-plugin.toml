@@ -19,7 +19,7 @@
 
 id = "herdr-sidebar"
 name = "herdr-sidebar"
-version = "0.48.0"
+version = "0.55.0"
 description = "VS Code-style sidebar: file explorer + source control (with ✧ AI commit messages) in one herdr pane."
 min_herdr_version = "0.7.0"
 platforms = ["linux", "macos", "windows"]
@@ -147,16 +147,6 @@ platforms = ["linux", "macos"]
 command = ["bash", "scripts/ensure-sidebar.sh"]
 
 [[events]]
-on = "workspace.focused"
-platforms = ["linux", "macos"]
-command = ["bash", "scripts/ensure-sidebar.sh"]
-
-[[events]]
 on = "tab.focused"
-platforms = ["windows"]
-command = ["wscript", "//B", "scripts/launch-ensure.vbs"]
-
-[[events]]
-on = "workspace.focused"
 platforms = ["windows"]
 command = ["wscript", "//B", "scripts/launch-ensure.vbs"]

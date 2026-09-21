@@ -1,6 +1,6 @@
 id = "herdr-space-title"
 name = "herdr-space-title"
-version = "0.9.0"
+version = "0.10.0"
 description = "Rename spaces from project folder until you rename them; session title on $folder subtitle (workspace + agent panes); infer repo from tools/memory when cwd is ~/Projects; pin grok session UUID"
 min_herdr_version = "0.7.0"
 platforms = ["linux", "macos"]
@@ -11,10 +11,6 @@ command = ["bash", "scripts/sync.sh"]
 
 [[events]]
 on = "tab.focused"
-command = ["bash", "scripts/sync.sh"]
-
-[[events]]
-on = "workspace.focused"
 command = ["bash", "scripts/sync.sh"]
 
 [[events]]

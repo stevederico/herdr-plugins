@@ -1,3 +1,7 @@
+0.55.0
+
+  Skip workspace-focus hooks
+
 0.54.0
 
   Remove hunk
