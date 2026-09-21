@@ -1,3 +1,7 @@
+0.58.0
+
+  Complete changelog header
+
 0.57.0
 
   Record README version
