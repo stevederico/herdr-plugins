@@ -1,3 +1,7 @@
+0.60.0
+
+  Detach folder reveal
+
 0.59.0
 
   Stop focus-hook flash

@@ -152,22 +152,48 @@ pub fn copy_to_clipboard(text: &str) -> io::Result<()> {
     }
 }
 
+/// Spawn a GUI helper without attaching it to this pane's terminal.
+/// File managers log to stderr; inherited, that paints over the TUI.
+fn spawn_detached(cmd: &mut std::process::Command) -> std::io::Result<()> {
+    use std::process::Stdio;
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
+    cmd.spawn().map(|_| ())
+}
+
 /// Open the platform file manager with the path selected (best-effort).
 pub fn reveal(path: &Path) {
     #[cfg(windows)]
     {
-        let _ = std::process::Command::new("explorer")
-            .arg(format!("/select,{}", path.display()))
-            .spawn();
+        let mut cmd = std::process::Command::new("explorer");
+        cmd.arg(format!("/select,{}", path.display()));
+        let _ = spawn_detached(&mut cmd);
     }
     #[cfg(target_os = "macos")]
     {
-        let _ = std::process::Command::new("open").arg("-R").arg(path).spawn();
+        let mut cmd = std::process::Command::new("open");
+        cmd.arg("-R").arg(path);
+        let _ = spawn_detached(&mut cmd);
     }
     #[cfg(all(unix, not(target_os = "macos")))]
     {
-        if let Some(parent) = path.parent() {
-            let _ = std::process::Command::new("xdg-open").arg(parent).spawn();
+        // Flea is the desktop file manager. `xdg-open` on a stock Omarchy
+        // install still resolves directories to Nautilus, whose Mutter and
+        // theme warnings then write straight into the explorer pane.
+        let mut flea = std::process::Command::new("flea");
+        flea.args(["--gui", "--select"]).arg(path);
+        if spawn_detached(&mut flea).is_err() {
+            if let Some(parent) = path.parent() {
+                let mut open = std::process::Command::new("xdg-open");
+                open.arg(parent);
+                let _ = spawn_detached(&mut open);
+            }
         }
     }
 }
