@@ -152,19 +152,44 @@ pub fn copy_to_clipboard(text: &str) -> io::Result<()> {
     }
 }
 
-/// Spawn a GUI helper without attaching it to this pane's terminal.
-/// File managers log to stderr; inherited, that paints over the TUI.
+// setsid(2). A new process group is not enough: the child keeps this
+// pane as its controlling terminal, and Flea/Quickshell log to /dev/tty.
+#[cfg(all(unix, not(target_os = "macos")))]
+unsafe extern "C" {
+    fn setsid() -> i32;
+}
+
+/// Spawn a GUI helper with no controlling terminal, and reap it so a
+/// short-lived launcher (xdg-open) does not stay a zombie in the pane.
 fn spawn_detached(cmd: &mut std::process::Command) -> std::io::Result<()> {
     use std::process::Stdio;
     cmd.stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-    #[cfg(unix)]
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        use std::os::unix::process::CommandExt;
+        // Do not also `process_group(0)`: that makes the child a group
+        // leader, and `setsid` then fails with EPERM.
+        unsafe {
+            cmd.pre_exec(|| {
+                if setsid() == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+    }
+    #[cfg(target_os = "macos")]
     {
         use std::os::unix::process::CommandExt;
         cmd.process_group(0);
     }
-    cmd.spawn().map(|_| ())
+    let mut child = cmd.spawn()?;
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+    Ok(())
 }
 
 /// Open the platform file manager with the path selected (best-effort).
@@ -257,6 +282,37 @@ mod tests {
         delete(&renamed, false).unwrap();
         delete(&folder, true).unwrap();
         assert!(!renamed.exists() && !folder.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Flea logs to the controlling tty. The helper must not have one.
+    #[cfg(all(unix, not(target_os = "macos")))]
+    #[test]
+    fn detached_child_has_no_tty() {
+        let dir = tmp("notty");
+        let out = dir.join("tty");
+        let marker = dir.join("rc");
+        let mut cmd = std::process::Command::new("sh");
+        cmd.arg("-c").arg(format!(
+            "tty > '{}' 2>&1; echo $? > '{}'",
+            out.display(),
+            marker.display()
+        ));
+        spawn_detached(&mut cmd).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        let text = loop {
+            if marker.exists() {
+                break std::fs::read_to_string(&out).unwrap_or_default();
+            }
+            if std::time::Instant::now() > deadline {
+                panic!("detached child did not report");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        };
+        assert!(
+            text.to_ascii_lowercase().contains("not a tty"),
+            "child still had a tty: {text:?}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

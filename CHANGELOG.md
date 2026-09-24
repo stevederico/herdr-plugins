@@ -1,3 +1,7 @@
+0.61.0
+
+  Detach reveal session
+
 0.60.0
 
   Detach folder reveal
